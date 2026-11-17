@@ -1,0 +1,2011 @@
+---
+title: "Effects of Exercise, Metformin and 17 Other Pharmacological Interventions on DunedinPACE"
+# Author:
+#   - name: Daniel Wikström Shemer
+#     Affiliations:
+#       - Department of Medical Epidemiology and Biostatistics, Karolinska Institutet, Stockholm, Sweden
+#       - Molecular Epidemiology, Department of Medical Sciences, Uppsala University, Uppsala, Sweden
+#       - Science for Life Laboratory (SciLifeLab), Uppsala University, Uppsala, Sweden
+#   - name: Shayan Mostafaei
+#     Affiliations:
+#       - Department of Medical Epidemiology and Biostatistics, Karolinska Institutet, Stockholm, Sweden
+#       - Division of Obstetrics and Gynaecology, Department of Clinical Science, Intervention and Technology (CLINTEC), Karolinska Institutet, Stockholm, Sweden
+#   - name: Yuliya Leontyeva
+#     Affiliations: Department of Medical Epidemiology and Biostatistics, Karolinska Institutet, Stockholm, Sweden
+#   - name: Natàlia Carreras-Gallo
+#     Affiliations: TruDiagnostic: Lexington, Kentucky, US
+#   - name: Ryan Smith
+#     Affiliations: TruDiagnostic: Lexington, Kentucky, US
+#   - name: Varun Dwaraka
+#     Affiliations: TruDiagnostic: Lexington, Kentucky, US
+#   - name: Tove Fall
+#     Affiliations:
+#       - Molecular Epidemiology, Department of Medical Sciences, Uppsala University, Uppsala, Sweden
+#       - Science for Life Laboratory (SciLifeLab), Uppsala University, Uppsala, Sweden
+#       - Department of Molecular and Clinical Medicine, Institute of Medicine, Sahlgrenska Academy, University of Gothenburg, Gothenburg, Sweden
+#   - name: Sara Hägg
+#     Affiliations: Department of Medical Epidemiology and Biostatistics, Karolinska Institutet, Stockholm, Sweden
+
+# Date: Last-Modified
+date-format: long
+format:
+  docx:
+    reference-doc: Program/References/manuscript-reference.docx
+lightbox: true
+echo: false
+warning: false
+tbl-cap-location: bottom
+fig-dpi: 300
+bibliography: Program/References/Article 2.bib
+csl: nature.csl
+filters:
+  - quarto
+  - Program/Filters/compact-crossrefs.lua
+
+crossref:
+  custom:
+  - kind: float
+    key: supptbl
+    latex-env: supptbl
+    reference-prefix: "Table S"
+    space-before-numbering: false
+    latex-list-of-description: "Supplementary Table"
+  - kind: float
+    key: suppfig
+    latex-env: suppfig
+    reference-prefix: "Figure S"
+    space-before-numbering: false
+    latex-list-of-description: "Supplementary Figure"
+---
+
+
+```{r}
+# INSTRUCTIONS TO USER:
+#   1. Run Master_parallel.R separately before rendering to save all analysis outputs
+#      and Output/manuscript_metadata.rds (de-identified tables and summaries).
+#   2. Run Biomarker_analysis/run.R separately to save the heatplots and supplementary
+#      Excel files in Output/biomarker_analysis/current/. Configure the bootstrap count
+#      for final inference first; the default of two iterations is for technical testing.
+#   3. Then render this Manuscript.qmd to generate the document from saved outputs.
+# Rendering requires the metadata file and never starts the analysis pipeline.
+# The project render also exports the supplementary SMD tables to one numbered Excel workbook
+# in Output/supplementary_tables/. It requires openxlsx and xml2 in the local R environment.
+```
+
+```{r}
+# Set CRAN mirror
+options(repos = c(CRAN = "https://cloud.r-project.org/"))
+
+# Install pacman if not already installed
+if (!require("pacman", quietly = TRUE)) {
+  install.packages("pacman")
+}
+
+library(pacman)
+
+# Load/install all required packages
+p_load(
+  here,           # File path management
+  tidyverse,      # Data manipulation and visualization
+  readr,          # Reading CSV files
+  readxl,         # Reading saved aggregate biomarker workbooks
+  lubridate,      # Date/time handling
+  dplyr,          # Data manipulation
+  DiagrammeR,     # Creating flowcharts
+  DiagrammeRsvg,  # Converting diagrams to SVG
+  rsvg,           # SVG rendering
+  UpSetR,         # UpSet plots for set intersections
+  patchwork,      # Combining plots
+  png,            # Reading PNG files
+  grid,           # Grid graphics
+  flextable,       # Tables for Word output
+  quarto         # Quarto document rendering
+)
+
+```
+
+```{r}
+#| include: false
+
+# Load the stable aggregate heatplot bundle; rendering never starts either pipeline.
+biomarker_output_dir <- here::here("Output", "biomarker_analysis", "current")
+biomarker_required_files <- c("main_heatmap_IPW.png", "main_heatmap_G-comp.png",
+  "Supplementary_Data_S1_IPW.xlsx", "Supplementary_Data_S2_G-comp.xlsx",
+  "export_metadata.csv", "SUCCESS.txt")
+biomarker_missing <- biomarker_required_files[!file.exists(file.path(biomarker_output_dir, biomarker_required_files))]
+if (length(biomarker_missing)) {
+  stop("Missing heatplot manuscript outputs in Output/biomarker_analysis/current/: ",
+       paste(biomarker_missing, collapse = ", "),
+       ". Run Biomarker_analysis/run.R separately with your local data before rendering.", call. = FALSE)
+}
+heatmap_export_metadata <- read.csv(file.path(biomarker_output_dir, "export_metadata.csv"), stringsAsFactors = FALSE)
+stopifnot(nrow(heatmap_export_metadata) == 1L,
+          is.finite(heatmap_export_metadata$heatmap_limit), heatmap_export_metadata$heatmap_limit > 0)
+
+# Load only de-identified tables and summaries for inline R and manuscript tables
+list2env(readRDS(here::here("Output", "manuscript_metadata.rds")), envir = environment())
+
+# Load the independently prepared aggregate affliction table.
+afflictions_table_path <- here::here("Output", "table1_afflictions_df.rds")
+if (!file.exists(afflictions_table_path)) {
+  stop("Missing Output/table1_afflictions_df.rds. Run Program/Table1_afflictions_step4b.R after steps 1-4 before rendering.", call. = FALSE)
+}
+table1_afflictions_df <- readRDS(afflictions_table_path)
+
+# Load aggregate combination results; the selected count follows the step-25 setting.
+combination_summary_path <- here::here("Output", "sensitivity_combinations_summary.rds")
+if (!file.exists(combination_summary_path)) {
+  stop("Missing combination sensitivity outputs. Run steps 25 and 26 with the main-analysis outputs before rendering.",
+       call. = FALSE)
+}
+combination_summary <- readRDS(combination_summary_path)
+n_top_combinations <- combination_summary$selection$n_top_combinations
+n_component_interventions <- length(combination_summary$selection$component_treatments)
+
+# Load exercise_by_metformin_summary and define helpers for inline extraction
+load(here::here("Output", "exercise_by_metformin_summary"))
+get_ex_met_val <- function(analysis, column) {
+  row <- exercise_by_metformin_summary[exercise_by_metformin_summary$Analysis == analysis, ]
+  if (nrow(row) == 0) return(NA)
+  row[[column]]
+}
+fmt_ci_to <- function(ci_str) {
+  gsub(", ", " to ", gsub("\\[|\\]", "", ci_str))
+}
+
+# Source helper functions
+source(here::here("Program", "Functions", "display_names.R"))
+source(here::here("Program", "Functions", "manuscript_functions.R"))
+source(here::here("Program", "Functions", "supplementary_table_export.R"))
+supplementary_export <- begin_supplementary_export(here::here())
+
+# Precompute display tables needed by inline R code later in the document
+table1_display <- table1_detailed_df |>
+  reorder_table_levels(level_col = "Level") |>
+  mutate(Variable = sapply(Variable, format_display_name))
+
+# Percentage excluded solely because of missing covariate data, among all
+# otherwise eligible participants at the final exclusion step
+n_complete_case <- exd_table$n_left[nrow(exd_table)]
+pct_excluded_missing_covariate <- 100 * n_excluded_missing_covariate /
+  (n_excluded_missing_covariate + n_complete_case)
+
+# Load additional data for inline references in Results section
+load(here::here("Output", "IPW_results_df"))
+load(here::here("Output", "IPW_all_diagnostics_table.RData"))
+load(here::here("Output", "Standardization_results_df"))
+load(here::here("Output", "training_analysis_results.RData"))
+load(here::here("Output", "metformin_summary"))
+load(here::here("Output", "exercise_by_metformin_summary"))
+load(here::here("Output", "concurrent_treatments_summary_df"))
+load(here::here("Output", "total_treatments_90th_percentile"))
+load(here::here("Output", "IPW_sensitivity_diet_df"))
+load(here::here("Output", "IPW_sensitivity_exercise_type_df"))
+
+# Load subgroup analysis results
+load(here::here("Output", "IPW_subgroup_male_df"))
+load(here::here("Output", "IPW_subgroup_female_df"))
+load(here::here("Output", "IPW_subgroup_younger_df"))
+load(here::here("Output", "IPW_subgroup_older_df"))
+load(here::here("Output", "IPW_subgroup_european_df"))
+load(here::here("Output", "IPW_subgroup_noneuropean_df"))
+
+# Percentages of all participants by concurrent non-exercise intervention use
+pct_single_intervention <- with(concurrent_treatments_summary_df,
+  100 * sum(`Number of Participants`[`Concurrent Interventions` == 1]) /
+    sum(`Number of Participants`)
+)
+pct_three_plus_interventions <- with(concurrent_treatments_summary_df,
+  100 * sum(`Number of Participants`[`Concurrent Interventions` >= 3]) /
+    sum(`Number of Participants`)
+)
+
+# Summarize saved aggregate results; these helpers never refit treatment models.
+source(here::here("Program", "manuscript_review_summaries.R"))
+main_review <- summarize_main_review(IPW_results_df, Standardization_results_df)
+if (n_complete_case != dunedin_stats$n_slow + dunedin_stats$n_fast ||
+    any(main_review$matched$IPW$n_treated + main_review$matched$IPW$n_control != n_complete_case)) {
+  stop("Main result sample sizes and manuscript cohort metadata disagree. Use the matching real-data outputs; do not mix the supplied 11,101-person cohort with the repository's 5,210-person summaries.",
+       call. = FALSE)
+}
+load(here::here("Output", "IPW_sensitivity_mutual_adjustment_df"))
+load(here::here("Output", "Standardization_sensitivity_mutual_adjustment_df"))
+mutual_review <- summarize_mutual_review(
+  IPW_sensitivity_mutual_adjustment_df, Standardization_sensitivity_mutual_adjustment_df
+)
+heatmap_review <- summarize_heatmap_review(biomarker_output_dir)
+heatmap_dunedin_main <- subset(heatmap_review$estimates$IPW,
+  biomarker == "DunedinPACE" & treatment %in% main_review$matched$IPW$treatment)
+if (any(mutual_review$matched$IPW$n_treated + mutual_review$matched$IPW$n_control != n_complete_case) ||
+    any(heatmap_dunedin_main$n_treated + heatmap_dunedin_main$n_control != n_complete_case)) {
+  stop("Saved mutually adjusted or DunedinPACE heatmap results use a different cohort from the manuscript metadata.",
+       call. = FALSE)
+}
+combination_review <- summarize_combination_review(combination_summary$results)
+
+```
+
+```{r}
+#| label: baseline-descriptive-tests
+#| include: false
+#| cache: false
+#| results: hide
+
+# Read the saved local cohort only; never source the Table 1 analysis or pipeline.
+source(here::here("Program", "Table1_descriptive_tests.R"))
+baseline_comparisons <- run_table1_descriptive_tests(
+  here::here("Output", "data_after_step4"), dunedin_stats
+)
+# stderr goes to the local knitting console, outside the rendered document.
+print_baseline_significant(baseline_comparisons)
+```
+
+Daniel Wikström Shemer^1,2^, Shayan Mostafaei^1,3^, Yuliya Leontyeva^1^, Natàlia Carreras-Gallo^4^, Ryan Smith^4^, Varun Dwaraka^4^, Tove Fall^2,5,6^, Sara Hägg^1^
+
+^*1*^*Department of Medical Epidemiology and Biostatistics, Karolinska Institutet, Stockholm, Sweden*\
+^*2*^*Molecular Epidemiology, Department of Medical Sciences, Uppsala University, Uppsala, Sweden*\
+^*3*^*Division of Obstetrics and Gynaecology, Department of Clinical Science, Intervention and Technology (CLINTEC), Karolinska Institutet, Stockholm, Sweden*\
+^*4*^*TruDiagnostic, Lexington, Kentucky, US*\
+^*5*^*Science for Life Laboratory (SciLifeLab), Uppsala University, Uppsala, Sweden*\
+^*6*^*Department of Molecular and Clinical Medicine, Institute of Medicine, Sahlgrenska Academy, University of Gothenburg, Gothenburg, Sweden*
+
+# Abstract
+
+Aging is a major risk factor for many chronic diseases, yet evidence that geroprotective interventions targeting aging can delay disease onset in healthy adults remains limited. We analyzed cross-sectional data from `r format(n_complete_case, big.mark = ",")` generally healthy adults (median age: `r round(median_age, 1)` years) to estimate the effects of exercise, metformin, and 17 other pharmacological interventions on DunedinPACE, an epigenetic measure of the pace of aging, and 20 other DNA methylation biomarkers. Using inverse probability weighting and G-computation, we adjusted for demographic and lifestyle covariates. Greater exercise frequency showed a monotonic association with lower DunedinPACE, whereas metformin use was associated with higher DunedinPACE. Among the additional pharmacological interventions, `r review_number(main_review$n_lower)` were associated with lower DunedinPACE and `r review_number(sum(main_review$higher_ids != "Metformin"))` with higher DunedinPACE across both methods. Results were generally similar across paired sex, age, and ethnicity subgroups in descriptive comparisons. These findings support that exercise is consistent with a geroprotective effect  and may help prioritize candidates for further research.
+
+# Background
+
+Biological aging unfolds through a gradual decline in bodily functions, manifesting at the cellular level as epigenetic alterations, mitochondrial dysfunction, disrupted protein homeostasis, impaired nutrient sensing, and chronic inflammation [@lopez-otinHallmarksAgingExpanding2023]. The geroscience hypothesis posits that aging is the primary risk factor for a wide range of chronic diseases, including cardiovascular conditions, type 2 diabetes (T2D), neurodegeneration, and cancer [@sierraGeroscienceTransNIHGeroscience2017]. Medications, supplements and interventions that target aging, also known as geroprotectors, have the potential to extend healthspan, the period of life spent free from age-related diseases [@barzilaiAgingBiologicalTarget2018].
+
+An array of geroprotectors has been proposed to target the hallmarks of aging [@suEffectsTA65Telomere2025; @faheyBroccoliSproutsExceptionally1997a; @baulieuDehydroepiandrosteroneDHEADHEA2000; @samarasReviewAgeRelatedDehydroepiandrosterone2013; @liEffectsDailyMultivitamin2026; @bischoff-ferrariIndividualAdditiveEffects2025; @rabinoviciPerimenopausalHormoneReplacement2025c; @ohStemCellAging2014; @kalluriBiologyFunctionBiomedical2020; @harrisonRapamycinFedLate2009; @rajmanTherapeuticPotentialNADboosting2018a; @baurResveratrolImprovesHealth2006; @kirklandSenolyticDrugsDiscovery2020; @bjelakovicMortalityRandomizedTrials2007] and repurposing of clinically approved medications has emerged as a pragmatic strategy to accelerate clinical translation [@kulkarniGeroscienceguidedRepurposingFDAapproved2022]. Metformin, a widely prescribed medication for T2D, has stood as a premier candidate for healthspan extension. However, trials in non-diabetic and prediabetic individuals have largely failed to demonstrate benefits for healthspan [@keysEmergingUncertaintyAntiaging2025]. Furthermore, evidence suggests that metformin may be detrimental in healthy older adults by inhibiting beneficial physiological adaptations to exercise, such as improved vascular insulin sensitivity, microvascular blood flow, and cardiorespiratory fitness [@malinMetforminBluntsVascular2025].
+
+Effects of metformin and other candidate geroprotectors may be further evaluated using biomarkers of biological aging, including DNA methylation-based measures such as epigenetic clocks. These algorithms use DNA methylation (DNAm) patterns to estimate biological age or the pace of aging. First-generation clocks were trained to predict chronological age. Following the terminology of Sehgal et al., generation 2+ describes clocks developed to predict phenotypic aging, mortality risk or longitudinal physiological decline rather than chronological age prediction alone [@sehgalResponsivenessEpigeneticAging2026]. DunedinPACE is an epigenetic clock which is conceptually distinct from previous epigenetic clocks: rather than estimating accumulated biological age, it estimates the current pace of biological aging from leukocyte DNAm [@belskyDunedinPACEDNAMethylation2022]. The measure was developed in the Dunedin birth cohort in New Zealand by modeling within-individual decline in 19 indicators of organ-system integrity, including BMI, waist–hip ratio and blood lipids. These indicators were assessed at four timepoints between ages 26 and 45 years, and then a regression model was fitted to produce a longitudinal pace-of-aging measure from a single blood sample. Because DunedinPACE estimates the current pace of biological aging rather than accumulated biological age, it may be more sensitive to current lifestyle factors and interventions, and less influenced by prior lifestyle and life-course exposures, than clocks that estimate accumulated biological age, such as GrimAge [@luDNAMethylationGrimAge2019a]. This may make the biomarker particularly useful for evaluating intervention effects using cross-sectional data. In a comparison of 16 epigenetic clocks across 51 longitudinal intervention studies, DunedinPACE showed statistically significant decreases in the greatest number of studies and was particularly responsive to lifestyle interventions[@sehgalResponsivenessEpigeneticAging2026]. When so, it never showed a direction of change that disagreed with the majority of other statistically significant clocks. These findings support choosing DunedinPACE for studying current intervention use and lifestyle exposures.
+
+This study aims to estimate the effects of self-reported exercise frequency, metformin and 17 other pharmacological interventions on DunedinPACE by applying a causal inference framework to observational cross-sectional data from generally healthy adults. In this study, pharmacological interventions include medications, supplements, and biological therapies such as stem cell and exosome therapies.
+
+# Results
+## TruDiagnostic Cohort Characteristics
+
+The study was based on a cohort of TruDiagnostic customers, with data collected via lifestyle questionnaires and dried blood spot collection cards. After quality control, exclusion of individuals with missing covariate data, technical anomalies and self-reported medical indications for metformin use (polycystic ovary syndrome, type 2 diabetes, gestational diabetes or prediabetes), the complete-case sample used for the main analysis comprised `r format(n_complete_case, big.mark = ",")` individuals (@suppfig-flowchart). For more details, see Methods. To evaluate the potential for selection bias, we compared demographic and lifestyle characteristics between the complete-case sample (n = `r format(n_complete_case, big.mark = ",")`) and participants who were excluded due solely to missing covariate information (n = `r format(n_excluded_missing_covariate, big.mark = ",")`; `r sprintf("%.1f", pct_excluded_missing_covariate)`% of otherwise eligible participants). The excluded group had higher proportions of individuals with professional degrees, tobacco users, individuals who never exercise and who never consume alcohol, and individuals identifying as Asian, Latin or other ethnicities (@suppfig-love-plot-excluded, @supptbl-excluded-characteristics). Self-reported medical conditions in this generally healthy cohort are summarized by category in @supptbl-self-reported-afflictions for the final analytical sample after all exclusions.
+
+In the complete-case sample (@tbl-baseline), most participants had DunedinPACE values below 1.0, consistent with slower-than-average biological aging compared to the Dunedin training cohort. The median DunedinPACE was `r sprintf("%.2f", dunedin_stats$median)` (IQR: `r sprintf("%.2f", dunedin_stats$q1)`–`r sprintf("%.2f", dunedin_stats$q3)`), with values ranging from `r sprintf("%.2f", dunedin_stats$min)` to `r sprintf("%.2f", dunedin_stats$max)`. Compared with participants with DunedinPACE <1.0, those with DunedinPACE ≥1.0 were generally older, had higher BMI, were more likely to report tobacco use, exercised less frequently and reported shorter sleep duration. They also included a lower proportion of participants reporting European ethnicity. The groups additionally differed in biological sex and the distributions of education and alcohol consumption. Overall comparisons of these characteristics were significant (all p <0.05; @tbl-baseline).
+
+Participants frequently combined pharmacological interventions and among all participants in the complete-case sample, only `r round(pct_single_intervention)`% reported using a single intervention, whereas approximately `r round(pct_three_plus_interventions)`% used three or more concurrently (@suppfig-concurrent-treatments, @supptbl-concurrent-treatments). Most commonly, participants paired vitamins with either fish oil/omega and/or minerals (@suppfig-upset).
+
+```{r}
+#| label: tbl-baseline
+#| tbl-cap: "**Characteristics of participants in TruDiagnostic**"
+#| tbl-cap-location: top 
+#| echo: false
+# Display Table 1
+flextable(table1_display) |>
+  fontsize(size = 10, part = "all") |>
+  padding(padding = 2, part = "all") |>
+  autofit() |>
+  set_table_properties(layout = "autofit", width = 1)
+```
+
+*BMI, body mass index; IQR, interquartile range; PhD, Doctor of Philosophy; MD, Doctor of Medicine; DO, Doctor of Osteopathic Medicine; DDS, Doctor of Dental Surgery; JD, Juris Doctor. The table presents the sample characteristics for the main analysis after exclusions. Ethnicity was recorded for all participants; ethnicity percentages use all participants in the respective group as the denominator. The term ‘Overall’ refers to all individuals in the complete-case sample, ‘DunedinPACE \< 1’ refers to individuals with DunedinPACE less than 1 and ‘DunedinPACE ≥ 1’ refers to individuals with DunedinPACE greater than or equal to 1.*
+
+## Effects of Exercise on DunedinPACE
+
+We estimated the average treatment effects (ATEs) on DunedinPACE using inverse probability weighting (IPW) and G-computation, with adjustment for lifestyle and socioeconomic factors (@suppfig-dag). Self-reported exercise frequency showed a monotonic association with lower DunedinPACE (@fig-training-combined, @supptbl-training-results). Throughout our results, ATE percentages express absolute DunedinPACE differences as percentages of the reference pace of 1 biological year per calendar year. Dividing the displayed ATE and both confidence limits by 100 recovers the absolute differences in DunedinPACE units. Compared to the reference group who never exercise (n = `r format(training_results_table$"N Control"[1], big.mark = ",")`), all exercise frequency categories were associated with lower DunedinPACE, indicating slower biological aging. In the IPW analysis, exercising 1–2 times per week was associated with an estimated DunedinPACE decrease of `r fmt_pct(training_results_table$"ATE (IPW)"[1])`, equivalent to aging approximately `r review_number(round(abs(training_results_table$"ATE (IPW)"[1]) * 365, 0))` days slower per calendar year. The magnitude of the estimated association increased monotonically with higher exercise frequency. G-computation estimates were highly concordant with IPW results across all exercise frequency levels. The propensity score weighting in the IPW analysis achieved adequate confounder balance for all exercise frequency levels except the 8+ times per week group, where BMI showed residual imbalance (@suppfig-exercise-8plus-balance). In the highest-frequency group without residual confounder imbalance (5–7 times per week), the estimated DunedinPACE difference corresponded to approximately `r review_number(round(abs(training_results_table$"ATE (IPW)"[3]) * 365, 0))` days slower biological aging per calendar year compared with participants who never exercise.
+
+```{r}
+#| label: fig-training-combined
+#| fig-cap: "**Estimated exercise frequency effects on DunedinPACE. (A)** Love plot showing that adequate confounder balance was achieved after inverse probability weighting (IPW) for the analysis of exercising 3-4 times per week, illustrated here as an example of our method. To assess confounder balance, the conventional threshold of |standardized mean difference (SMD)| < 0.1 was used. Positive SMDs indicate higher values (for numerical variables) or higher prevalence (for categorical variables) of confounders in the 3-4 times per week group, whereas negative SMDs indicate higher values or higher prevalence in the never-exercising reference group. Confounder balance was assessed for all exercise frequency levels this way. **(B)** Forest plot showing average treatment effects (ATEs) of different exercise frequencies compared to never exercising with adjustment for demographic and lifestyle factors. Circles represent ATE point estimates and capped horizontal lines represent 95% confidence intervals calculated via IPW and G-computation. Higher self-reported exercise frequency was associated with progressively lower DunedinPACE compared with never exercising. ATE percentages and their 95% confidence limits express absolute DunedinPACE differences as percentages of the reference pace of 1 biological year per calendar year. Divide the displayed ATE percentage and each confidence limit by 100, retaining their signs, to recover absolute differences in DunedinPACE units."
+#| echo: false
+#| out-width: "100%"
+
+# Load images
+# The following composition stages now run in the shared step-18 exporter:
+# Create grobs
+# Combine with labels - Love plot first (A), Forest plot second (B)
+# Calculate aspect ratios to scale widths so heights match
+knitr::include_graphics(here::here("Output", "Combined_figures", "training_combined.png"))
+```
+
+## Exercise and DunedinPACE Stratified by Metformin Use
+
+After exclusions, including the exclusion of individuals with self-reported indications for metformin use (@suppfig-flowchart), we estimated the ATE of exercising at least five times per week compared with zero to four times per week separately among metformin users and non-users (@fig-exercise-by-metformin-forest, @supptbl-exercise_by_metformin_summary). Point estimates were similar and confidence intervals overlapped between users and non-users.
+
+```{r}
+#| label: fig-exercise-by-metformin-forest
+#| fig-cap: !expr paste0("**Effect of exercise on DunedinPACE stratified by metformin use.** Forest plot showing average treatment effects (ATEs) of exercising five or more times per week compared to exercising zero to four times per week, stratified by metformin usage status. Adjustment for demographic and lifestyle factors was done. Circles represent ATE point estimates and capped horizontal lines represent 95% confidence intervals calculated via inverse probability weighting (IPW) and G-computation. Exercise effect point estimates were similar and confidence intervals overlapped between metformin users (ATE = ", get_ex_met_val('Metformin users', 'ATE (IPW)'), "; n = ", format(get_ex_met_val('Metformin users', 'N 5+ times/wk'), big.mark = ','), " exercising 5+ times/week vs. ", format(get_ex_met_val('Metformin users', 'N 0-4 times/wk'), big.mark = ','), " exercising 0-4 times/week) and non-users (ATE = ", get_ex_met_val('Metformin non-users', 'ATE (IPW)'), "; n = ", format(get_ex_met_val('Metformin non-users', 'N 5+ times/wk'), big.mark = ','), " exercising 5+ times/week vs. ", format(get_ex_met_val('Metformin non-users', 'N 0-4 times/wk'), big.mark = ','), " exercising 0-4 times/week). Propensity score weighting achieved adequate confounder balance between those exercising zero to four times per week and those exercising five or more times per week in both metformin users and non-users. ATE percentages and their 95% confidence limits express absolute DunedinPACE differences as percentages of the reference pace of 1 biological year per calendar year. Divide the displayed ATE percentage and each confidence limit by 100, retaining their signs, to recover absolute differences in DunedinPACE units.")
+#| fig-width: 10
+#| fig-height: 5.30
+#| echo: false
+
+load(here::here("Output", "Forest_plots", "exercise_by_metformin_forest_plot"))
+exercise_by_metformin_forest_plot
+```
+
+## Effect of Metformin on DunedinPACE
+
+After exclusions, including the exclusion of individuals with self-reported indications for metformin use (@suppfig-flowchart), metformin (`r format(get_ipw_value("Metformin", "n_treated"), big.mark = ",")` users vs. `r format(get_ipw_value("Metformin", "n_control"), big.mark = ",")` non-users) was associated with higher DunedinPACE in the main analysis (IPW: ATE = `r fmt_pct(get_ipw_value("Metformin", "ate_estimate"))`; G-computation: ATE = `r fmt_pct(get_std_value("Metformin", "ate_estimate"))`; @fig-metformin-combined, @supptbl-metformin-summary). This effect corresponds to aging `r review_number(round(abs(get_ipw_value("Metformin", "ate_estimate")) * 365, 0))` days faster per calendar year. To describe variation in point estimates and confidence intervals by sex, age, ethnicity and exercise frequency, subgroup analyses were conducted. All the point estimates of the subgroup analyses were directionally consistent with the main analysis and confidence intervals overlapped.
+
+```{r}
+#| label: fig-metformin-combined
+#| fig-cap: !expr paste0("**Metformin effects on DunedinPACE in individuals without a medical reason for metformin use. (A)** Love plot showing that adequate confounder balance was achieved in metformin users (n = ", format(get_ipw_value('Metformin', 'n_treated'), big.mark = ','), ") and non-users (n = ", format(get_ipw_value('Metformin', 'n_control'), big.mark = ','), ") after inverse probability weighting (IPW) in the main analysis. To assess this, the conventional threshold of |standardized mean difference (SMD)| < 0.1 was used. Positive SMDs indicate higher values (for numerical variables) or higher prevalence (for categorical variables) of confounders among metformin users, whereas negative SMDs indicate higher values or higher prevalence in non-users. **(B)** Forest plot showing average treatment effects (ATEs) of metformin across main and subgroup analyses with adjustment for demographic and lifestyle factors. Circles represent ATE point estimates and capped horizontal lines represent 95% confidence intervals calculated via IPW and G-computation. In all analyses, the reference group is non-users within the subgroup. The main analysis, which included all subgroups and ", format(n_complete_case, big.mark = ','), " individuals after exclusions, shows that metformin use is associated with higher DunedinPACE. Subgroup point estimates had the same direction as the main analysis. ATE percentages and their 95% confidence limits express absolute DunedinPACE differences as percentages of the reference pace of 1 biological year per calendar year. Divide the displayed ATE percentage and each confidence limit by 100, retaining their signs, to recover absolute differences in DunedinPACE units.")
+#| echo: false
+#| out-width: "100%"
+
+# Load images
+# The following composition stages now run in the shared step-18 exporter:
+# Create grobs
+# Combine with labels - Love plot first (A), Forest plot second (B)
+# Calculate aspect ratios to scale widths so heights match
+knitr::include_graphics(here::here("Output", "Combined_figures", "metformin_combined.png"))
+```
+
+## Effects of Pharmacological Interventions on DunedinPACE
+Of the `r main_review$n_interventions` pharmacological interventions examined, `r review_number(main_review$n_lower)` were associated with lower DunedinPACE and `r review_number(main_review$n_higher)`, including metformin, with higher DunedinPACE in both IPW and G-computation analyses, with confidence intervals excluding zero after adjustment for demographic and lifestyle factors (@fig-forest-plot-treatments, @supptbl-comparison-results). In the IPW analysis, sulforaphane/broccoli extract users (n = `r format(get_ipw_value("Sulphoraphane.broccoli.extract", "n_treated"), big.mark = ",")`) showed the largest ATE estimate of `r fmt_pct(get_ipw_value("Sulphoraphane.broccoli.extract", "ate_estimate"))`, corresponding to aging `r review_number(round(abs(get_ipw_value("Sulphoraphane.broccoli.extract", "ate_estimate")) * 365, 0))` days slower per calendar year. NR/NAD+ supplementation (n users = `r format(get_ipw_value("NR.NAD", "n_treated"), big.mark = ",")`) and antioxidant use (n users = `r format(get_ipw_value("Antioxidants", "n_treated"), big.mark = ",")`) were associated with estimated DunedinPACE differences of `r fmt_pct(get_ipw_value("NR.NAD", "ate_estimate"))` and `r fmt_pct(get_ipw_value("Antioxidants", "ate_estimate"))`, respectively. Fish oil/omega fatty acids (n users = `r format(get_ipw_value("Fish.oil.omega", "n_treated"), big.mark = ",")`) were associated with an estimated DunedinPACE difference of `r fmt_pct(get_ipw_value("Fish.oil.omega", "ate_estimate"))`. Resveratrol users (n users = `r format(get_ipw_value("Resveratrol", "n_treated"), big.mark = ",")`), mineral supplements (n users = `r format(get_ipw_value("Minerals", "n_treated"), big.mark = ",")`), herbal supplements (n users = `r format(get_ipw_value("Herbal.supplements", "n_treated"), big.mark = ",")`) and vitamins (n users = `r format(get_ipw_value("Vitamins", "n_treated"), big.mark = ",")`) demonstrated estimated DunedinPACE differences of `r fmt_pct(get_ipw_value("Resveratrol", "ate_estimate"))`, `r fmt_pct(get_ipw_value("Minerals", "ate_estimate"))`, `r fmt_pct(get_ipw_value("Herbal.supplements", "ate_estimate"))` and `r fmt_pct(get_ipw_value("Vitamins", "ate_estimate"))`, respectively (@supptbl-comparison-results). Workout supplements (n users = `r format(get_ipw_value("Workout.supplements", "n_treated"), big.mark = ",")`) were borderline in IPW (ATE = `r fmt_pct(get_ipw_value("Workout.supplements", "ate_estimate"))`, 95% CI `r fmt_pct(get_ipw_value("Workout.supplements", "ci_lower"))` to `r fmt_pct(get_ipw_value("Workout.supplements", "ci_upper"))`), whereas the G-computation interval was below zero (ATE = `r fmt_pct(get_std_value("Workout.supplements", "ate_estimate"))`, 95% CI `r fmt_pct(get_std_value("Workout.supplements", "ci_lower"))` to `r fmt_pct(get_std_value("Workout.supplements", "ci_upper"))`).
+
+```{r}
+#| label: fig-forest-plot-treatments
+#| fig-cap: !expr paste0("**Effects of pharmacological interventions on DunedinPACE.** This forest plot shows the average treatment effects (ATEs) of pharmacological interventions. Circles represent ATE point estimates, and capped horizontal lines represent the 95% confidence intervals calculated via inverse probability weighting (IPW) and G-computation methods. The dashed vertical line indicates no effect (ATE = 0). Adjustment for demographic and lifestyle factors was done. Interventions are ordered by the effect sizes from the IPW analysis. In our dataset, ", review_number(main_review$n_lower), " pharmacological interventions had confidence intervals below zero across both IPW and G-computation; ", review_number(main_review$n_higher), ", including metformin, had intervals above zero. Workout supplements were borderline in IPW and had a negative interval excluding zero in G-computation. The remaining interventions had uncertain associations, with confidence intervals overlapping zero. Sulforaphane/broccoli extract users showed the largest estimated beneficial effect, whereas users of exosome therapy showed the largest adverse effect in our analyses. ATE percentages and their 95% confidence limits express absolute DunedinPACE differences as percentages of the reference pace of 1 biological year per calendar year. Divide the displayed ATE percentage and each confidence limit by 100, retaining their signs, to recover absolute differences in DunedinPACE units.")
+#| fig-width: 10
+#| fig-height: 8.89
+#| echo: false
+
+# Load pre-generated forest plot from step 18
+load(here::here("Output", "Forest_plots", "interventions_forest_plot"))
+interventions_forest_plot
+```
+
+Exosome therapy (n users = `r format(get_ipw_value("Antiaging.Exosome", "n_treated"), big.mark = ",")`) showed the largest adverse ATE estimate, with an estimated DunedinPACE difference of `r fmt_pct(get_ipw_value("Antiaging.Exosome", "ate_estimate"))`, which is equivalent to aging `r review_number(round(abs(get_ipw_value("Antiaging.Exosome", "ate_estimate")) * 365, 0))` days faster per calendar year. Stem cell therapy (n users = `r format(get_ipw_value("Antiaging.Stem.Cell", "n_treated"), big.mark = ",")`) exhibited an adverse ATE estimate of `r fmt_pct(get_ipw_value("Antiaging.Stem.Cell", "ate_estimate"))`. The remaining interventions had uncertain associations, with confidence intervals overlapping zero. Rapamycin and TA-65 did not achieve balanced confounders in our IPW models (@suppfig-rapamycin-ta65-balance, @supptbl-comparison-results).
+
+### Sensitivity Analyses
+
+A sensitivity analysis assessed whether extreme inverse probability weights disproportionately influenced our main estimates (@suppfig-extreme-weights, @supptbl-extreme-weights). Capping weights at the 1st and 99th percentiles while retaining all participants produced similar results, suggesting that extreme weights did not change the main findings. Adjustment for primary dietary pattern and exercise type did not markedly alter our main analysis results (@suppfig-sensitivity-diet, @supptbl-sensitivity-diet, @suppfig-sensitivity-exercise-type, @supptbl-sensitivity-exercise-type). However, some interventions exhibited residual confounder imbalances after IPW (@supptbl-sensitivity-diet, @supptbl-sensitivity-exercise-type).
+
+Because vitamins were by far the most commonly combined supplement and used by a majority of the cohort (@suppfig-upset), we repeated the main analysis with vitamin use as a covariate rather than an exposure (@suppfig-sensitivity-vitamins). Estimates were similar to those in the main analysis, although some interventions retained covariate imbalance (@supptbl-sensitivity-vitamins). To investigate whether intervention effects could be additive, we also evaluated mutual adjustment for the fixed set of 12 interventions with confidence intervals excluding zero. Workout supplements were included because of its borderline IPW result (@suppfig-sensitivity-mutual-adjustment). `r review_number(mutual_review$n_lower, capital = TRUE)` mutually adjusted interventions, fish oil/omega and antioxidants, had negative confidence intervals excluding zero in both methods; antioxidants retained covariate imbalance after IPW, whereas fish oil/omega did not (@supptbl-sensitivity-mutual-adjustment).
+
+To further investigate whether intervention effects could be additive, we estimated associations for the `r n_top_combinations` most frequent exact-use combinations containing at least two interventions (@suppfig-upset). Each exact combination was compared with all other participants (@suppfig-sensitivity-combinations). `r review_number(combination_review$n_excluding_zero, capital = TRUE)` combinations had confidence intervals excluding zero in both methods: the combination of antioxidants, fish oil/omega, workout supplements, herbal supplements, vitamins and minerals had negative intervals, whereas herbal supplements with vitamins had positive intervals. `r review_number(combination_review$n_imbalanced, capital = TRUE)` of the `r review_number(combination_review$n_combinations)` combinations retained covariate imbalance after IPW, including both combinations with intervals excluding zero (@supptbl-sensitivity-combinations). 
+
+Exploratory heatmaps of intervention effect estimates from DunedinPACE and 20 other DNAm biomarkers [@mcgreevyDNAmFitAgeBiologicalAge2023; @chenOMICmAgeQuantifiesBiological2026; @higgins-chenComputationalSolutionBolstering2022; @sehgalSystemsAgeSingle2025] were generated to examine how estimated associations varied with the choice of biomarker (@suppfig-heatmap-ipw, @suppfig-heatmap-gcomp). Negative sign-adjusted estimates denote favorable directions and positive estimates unfavorable directions. The heatmaps showed variation in ATE directions across DNAm biomarkers, however, significant ATEs mostly agreed with each other across biomarkers. For metformin, IPW yielded favorable estimates for `r review_number(heatmap_review$metformin$IPW$favorable)` of `r heatmap_review$n_biomarkers` biomarkers, of which none were statistically significant, and unfavorable estimates for `r review_number(heatmap_review$metformin$IPW$unfavorable)`, of which `r review_number(heatmap_review$metformin$IPW$unfavorable_not_significant)` were not statistically significant. For metformin, G-computation yielded favorable estimates for `r review_number(heatmap_review$metformin$Gcomp$favorable)` biomarkers, of which `r review_number(heatmap_review$metformin$Gcomp$favorable_not_significant)` were not statistically significant, and unfavorable estimates for `r review_number(heatmap_review$metformin$Gcomp$unfavorable)`, of which `r review_number(heatmap_review$metformin$Gcomp$unfavorable_not_significant)` were not statistically significant. The favorable estimates in both methods concerned Horvath.PC, PhenoAge.PC and SystemsAge.Immune. Only Horvath.PC had a favorable interval excluding zero in G-computation. Senolytic estimates had mixed directions, and all their intervals included zero.
+
+To explore which DNAm biomarkers respond to interventions in similar ways and which interventions affect DNAm in similar ways, we applied hierarchical clustering to the heatmaps (@suppfig-heatmap-ipw, @suppfig-heatmap-gcomp). We defined a shared cluster as having identical branch membership in both IPW and G-computation dendrograms and Pearson correlation ≥0.80. Across IPW and G-computation we identified  `r review_number(length(heatmap_review$clusters$biomarkers))` biomarker clusters: DNAmFitAge with SystemsAge Blood and SystemsAge Liver; SystemsAge Inflammation with SystemsAge Metabolic; SystemsAge Heart with SystemsAge; SystemsAge Brain with SystemsAge Kidney; and PCGrimAge with SystemsAge Lung. Across IPW and G-computation we identified `r review_number(length(heatmap_review$clusters$interventions))` intervention clusters which comprised NR/NAD+ with antioxidants and herbal supplements with minerals.
+
+### Subgroup Analysis
+
+To evaluate whether intervention effects varied across demographic groups, we conducted subgroup analyses stratified by sex (men vs. women), age (<`r round(median_age, 1)` years vs. ≥`r round(median_age, 1)`), and ancestry (European vs. non-European). Across both IPW and G-computation methods, 95% confidence intervals largely overlapped between paired strata. These descriptive comparisons do not establish equivalence or negligible differences between subgroups (@suppfig-subgroup-sex, @suppfig-subgroup-age, @suppfig-subgroup-ethnicity). However, in sex-stratified analyses, hormone replacement therapy (HRT) was notably associated with a higher DunedinPACE in men, while showing no apparent association in women. Some interventions exhibited residual confounder imbalances after IPW (@supptbl-subgroup-men, @supptbl-subgroup-women, @supptbl-subgroup-younger, @supptbl-subgroup-older, @supptbl-subgroup-european, @supptbl-subgroup-noneuropean). Notably, chronological age was imbalanced in women taking HRT, as it was used more frequently by older women (@suppfig-hrt-women-balance).
+
+# Discussion
+
+In this large-scale cross-sectional analysis, we applied a causal inference framework to observational data to estimate the average treatment effects of exercise, metformin and 17 other pharmacological interventions on the pace of biological aging, as quantified by the DunedinPACE epigenetic clock. Our results demonstrated a monotonic, dose-dependent relationship between exercise frequency and lower DunedinPACE. Notably, we found that metformin was associated with an accelerated epigenetic pace of aging after excluding participants reporting PCOS, type 2 diabetes, gestational diabetes or prediabetes. The exercise estimates were similar among metformin users and non-users. Sulforaphane/broccoli extract, nicotinamide riboside (NR)/NAD+, antioxidants, fish oil/omega, resveratrol, minerals, herbal supplements and vitamins had negative confidence intervals excluding zero across both IPW and G-computation. Workout supplements were borderline in IPW and had a negative interval excluding zero in G-computation. Exosome and stem cell therapy were associated with a higher DunedinPACE. Whether combining pharmacological interventions provides additive benefits remains uncertain. Sensitivity and subgroup analyses showed broadly consistent results with the main analysis. An exception was HRT, which was associated with higher DunedinPACE in men, while showing no apparent association in women with confidence intervals overlapping zero.  The exploratory heatmaps showed variation in ATE directions across DNAm biomarkers, however, significant ATEs mostly agreed with each other across biomarkers. Metformin had unfavorable estimates for `r review_number(heatmap_review$metformin$IPW$unfavorable)` of `r heatmap_review$n_biomarkers` biomarkers in IPW and `r review_number(heatmap_review$metformin$Gcomp$unfavorable)` of `r heatmap_review$n_biomarkers` biomarkers in G-computation.
+
+The findings for exercise support that exercise is consistent with a geroprotective effect. However, remaining IPW imbalance for BMI in the highest exercise frequency group (≥8 times per week), with an absolute SMD greater than 0.1, warrants careful interpretation of the effect estimate in that specific stratum. This residual imbalance may reflect the lower BMI distribution among highly active individuals, which could not be fully balanced against individuals who never exercise (@suppfig-exercise-8plus-balance).
+
+Our metformin results align with emerging literature indicating that the medication may have disadvantageous physiological effects in healthy individuals [@keysEmergingUncertaintyAntiaging2025]. However, we found no direct evidence in this study to suggest that it blunts the beneficial physiological adaptations to exercise, as suggested by Malin et al. [@malinMetforminBluntsVascular2025].
+
+The results concerning different HRT effects in men and women could be a consequence of men and women taking different sex hormones. Many women take estrogen and progesterone during menopause and men supplementing with hormones could have taken testosterone instead. The hormone replacement treatment category was a broad, self-reported category without information about indication, formulation, dose, duration, achieved hormone concentrations, or therapeutic vs. supraphysiological use. Confounding by indication and reverse causation are plausible explanations. In men, age, obesity, and comorbidity are associated with lower testosterone, and longitudinal data show that weight gain lowers testosterone, whereas weight loss raises testosterone [@camachoAgeassociatedChangesHypothalamic2013]. Men experiencing symptoms or ill health associated with both androgen deficiency and faster biological aging may therefore have been more likely to initiate HRT. One possible explanation for why the HRT effect in women was inconclusive could be that chronological age remained unbalanced after IPW with more users being older in our dataset. This is likely because HRT is primarily used in older women who experience menopausal symptoms, making it difficult to generalize our model to women across all age groups.
+
+Our findings for fish oil/omega fatty acids, vitamins, and mineral supplements are partially consistent with results from the DO-HEALTH and COSMOS placebo-controlled trials. In DO-HEALTH, a post hoc epigenetic analysis of 777 older adults found that supplementation with 1 g/day of omega-3 for three years slowed DunedinPACE by approximately -1% [@bischoff-ferrariIndividualAdditiveEffects2025]. In our IPW analysis, fish oil/omega fatty acid use was associated with a DunedinPACE difference of `r fmt_pct(get_ipw_value("Fish.oil.omega", "ate_estimate"))`. In COSMOS, daily multivitamin–multimineral supplementation for two years in 958 older adults modestly slowed increases in PCPhenoAge and PCGrimAge, while the overall DunedinPACE estimate was also in the favorable direction but not significant [@liEffectsDailyMultivitamin2026]. The COSMOS findings therefore provide partial support for our vitamin and mineral results.
+
+The uncertain associations for high-profile interventions such as rapamycin, senolytics and TA-65 [@suEffectsTA65Telomere2025; @harrisonRapamycinFedLate2009] leave room for speculation. For rapamycin, the wide confidence intervals directly reflect a very small user population characterized by demographic profiles that were difficult to balance. This difficulty likely arises because rapamycin users constitute an extreme phenotype of longevity-conscious individuals, often willing to endure potentially strong side effects and utilize off-label prescription medications, making them distinct and challenging to balance against the broader cohort. This underscores the need for adequately powered randomized placebo-controlled studies. One possible explanation for weak senolytic responses is that senescence-related CpGs constitute only a small proportion of age-related CpGs, limiting the sensitivity of DNAm biomarkers to cellular senescence [@kasamotoDNAMethylationSignatures2026]. Similarly, the lack of significant effects for TA-65, a telomerase activator, could be because TA-65 specifically targets telomere attrition [@suEffectsTA65Telomere2025], which might not be detected by DNAm biomarkers either.
+
+Our study complements the biomarker benchmarking study of Sehgal et al. [@sehgalResponsivenessEpigeneticAging2026]. Their longitudinal analysis of 51 interventions in 1,564 individuals used a panel of 16 DNAm biomarkers, allowing assessment of within-individual change, agreement between clocks, and responses across studies of similar interventions. Both our studies observed a consistent favorable epigenetic response for exercise. An important difference between our studies is that Sehgal et al. reported favorable metformin-associated changes over time in PCGrimAge, PCPhenoAge and SystemsAge, whereas metformin estimates in our study pointed in an unfavorable direction for most DNAm biomarkers. The differences between our study results could be because the metformin trial in Sehgal et al. [@corleyCelltypeSpecificImpact2024] was a 24-week study of only six treated male participants who were virally suppressed people living with human immunodeficiency virus (HIV), and the epigenetic effects were measured specifically in monocytes, whereas we utilized a generally healthy cohort.
+
+The clustering of DNAm biomarkers and interventions suggests shared biological pathways (@suppfig-heatmap-ipw, @suppfig-heatmap-gcomp). DNAm biomarkers with similar ATE profiles may capture overlapping aging processes. For example, the clustering of PCGrimAge with SystemsAge Lung could reflect a shared sensitivity to smoking-related pathways, since smoking pack-years was in part used to train GrimAge [@luDNAMethylationGrimAge2019a]. Similarly, interventions that cluster together, such as NR/NAD+ and antioxidants, might influence common biological pathways. These findings raise the possibility that measuring several closely clustered biomarkers provides limited additional information for assessing intervention responses. Likewise, combining clustered interventions such as NR/NAD+ and antioxidants may be redundant, since they might target the same epigenetic aging pathways. However, clustering may also reflect intervention co-use and residual confounding.
+
+Despite a robust analytic framework and a large sample size, our study has several important limitations. First, this was not a population-based sample: the cohort consisted of TruDiagnostic customers recruited through a direct-to-consumer platform, healthspan-oriented clinics, and functional medicine practices, and it was predominantly composed of generally healthy individuals of European descent. This recruitment framework may have introduced selection bias and may limit the generalizability of these findings to broader, more diverse, or clinically burdened populations. Second, we relied on a complete-case analysis, excluding `r sprintf("%.1f", pct_excluded_missing_covariate)`% of otherwise eligible individuals due to missing covariate data. Because the excluded participants exhibited a higher prevalence of generally unhealthy traits (e.g., reported tobacco use, physical inactivity, faster DunedinPACE), their removal likely biased our treatment effect estimates. Third, the reliance on self-reported survey data precluded adjustment for intervention dosage, frequency, and duration of use. Many categories (e.g., "stem cell therapy", "NAD therapy", "vitamins") were broadly defined and subject to participant interpretation. Furthermore, certain supplements may represent low-quality formulations that do not contain the concentrations of active ingredients listed on their labels, as demonstrated by Sandalova et al. [@sandalovaTestingAmountNicotinamide2024], which would bias results toward the null. Fourth, as this is an observational study, we cannot definitively rule out unmeasured confounders, making residual and unmeasured confounding an inherent limitation despite rigorous multi-confounder adjustments. For example, we lacked data on caloric intake, a critical variable shown by the CALERIE trial to lower DunedinPACE by 2-3% [@waziryEffectLongtermCaloric2023]. Fifth, although sensitivity analyses adjusted for co-use, we could not draw conclusions on additive effects for the pharmacological interventions. Sixth, our cross-sectional data do not allow us to rule out reverse causation for any intervention. Individuals with poorer health or concerns about their aging may be more likely to initiate an intervention. Randomized, placebo-controlled trials with standardized protocols and pre- and post-intervention measurements are needed to address these limitations. Finally, biomarker responsiveness does not by itself establish biological rejuvenation or longer lifespan and epigenetic clocks lack an established minimal clinically important difference [@sehgalResponsivenessEpigeneticAging2026].
+
+In conclusion, this large cross-sectional analysis identified a monotonic association between greater exercise frequency and lower DunedinPACE. Metformin use was associated with higher DunedinPACE. Of the `r main_review$n_interventions` pharmacological interventions examined, `r review_number(main_review$n_lower)` had confidence intervals below zero across both IPW and G-computation; `r review_number(main_review$n_higher)`, including metformin, had intervals above zero across both methods. The sensitivity and subgroup analyses yielded results broadly consistent with the main analysis, with no clear sex-, age- or ethnicity-specific differences observed. Our study helps to address an unmet clinical need by estimating the effects of geroprotective interventions in humans and prioritizing such interventions for further research.
+
+# Methods
+
+## Ethical Approval and Consent to Participate
+
+The study was approved by the Swedish Ethical Review Authority with Dnr 2022-06634-01 and Dnr 2024-01210-02.
+
+## Data
+
+For this study, we utilized data provided by TruDiagnostic, a commercial laboratory specializing in DNAm analysis. The company maintains a large-scale repository of epigenetic data comprising profiles from more than 30,000 individuals, from which the main complete-case sample comprised `r format(n_complete_case, big.mark = ",")` individuals. The data for our study were collected between May 12, 2020, and July 2, 2024. Biological samples were obtained using dried blood spot collection cards. The study population derives from a mixed recruitment model, encompassing self-referred individuals utilizing a direct-to-consumer online platform, as well as patients tested through healthspan-oriented clinics and functional medicine practices worldwide.
+
+### DNA Methylation Data
+
+DNA methylation was measured using Illumina Infinium MethylationEPIC BeadChip arrays. The source data included both EPICv1 and EPICv2 platforms. However, because TruDiagnostic switched to the EPICv2 platform later during the sample collection period, relatively few individuals were assessed using this newer array. The new EPICv2 array does not contain 29 of the original 173 DunedinPACE probes (\~17%) [@ValidationDunedinPACEEPIC], which means imputation methods would have been needed, potentially introducing bias. To prevent potential confounding by these array differences and the timing of cohort entry, `r format(exd_table$n_right[1], big.mark = ",")` individuals with missing array information or an array designation other than EPICv1 were excluded (@suppfig-flowchart), and the present analysis was restricted exclusively to samples measured on EPICv1 arrays. We employed the DunedinPACE biological aging clock [@belskyDunedinPACEDNAMethylation2022] as the primary epigenetic outcome in this study.
+
+Raw intensity data (IDAT files) were processed using the minfi R package. Samples were excluded if more than 5% of probes had a detection p-value > 0.05 or a bead count < 3. Samples with a mismatch between self-reported sex and sex predicted from DNA methylation data were also excluded. Remaining samples were normalized using the noob (normal-exponential out-of-band) method. DunedinPACE was then calculated from the processed β-values using the DunedinPACE R package (github.com/danbelsky/DunedinPACE).
+
+## Survey
+
+The epigenetic tests were paired with extensive self-administered lifestyle and health surveys capturing detailed information on exercise, sleep, diet, medication, and stress. At the time TruDiagnostic shared their data, they had iterated between three different survey versions to collect lifestyle data without noting which version was used for each individual. Thus, survey version classification was required to ensure consistency in covariate availability. Individuals were classified into the three versions based on the date of data collection and the presence of survey version-specific variables in the dataset (for a detailed description of the classification algorithm, see Supplementary Methods). In summary, this classifying procedure identified `r format(exd_table$n_left[1], big.mark = ",")` individuals as Survey 1 users. The present analysis was restricted to Survey 1 to maximize sample size while preventing potential bias from combining surveys with different questions. The Survey 1 questionnaire can be found in Supplementary File 1.
+
+## Sample Exclusions
+
+The main analytical sample was restricted to Survey 1 respondents with a recorded EPICv1 array designation. We excluded individuals with missing or “Other” biological sex; missing chronological age or age outside 18–110 years; missing or nonpositive DunedinPACE; BMI < 15 kg/m²; or missing primary-model covariates. We also excluded individuals reporting polycystic ovary syndrome (PCOS), type 2 diabetes, gestational diabetes, or prediabetes to reduce confounding by indications for metformin use, the primary intervention evaluated. These exclusions yielded `r format(exd_table$n_left[nrow(exd_table)], big.mark = ",")` participants. Sequential exclusion counts and detailed handling of missing values are provided in Supplementary @suppfig-flowchart and the Supplementary Methods.
+
+Sensitivity analyses adjusting for diet or exercise type additionally required complete data for the respective variable. For the biomarker heatmaps, the requirement for valid DunedinPACE was replaced by a validity requirement for each analyzed biomarker, resulting in biomarker-specific analytical samples. Ethnicity was recorded for all individuals in the source dataset, which meant no participants were excluded from ethnicity-stratified analyses because of missing ethnicity.
+
+## Exposures
+
+We examined the effects of self-reported use of 18 pharmacological interventions and exercise on DunedinPACE. Pharmacological interventions were classified as binary exposures (user vs. non-user). The evaluated interventions were: exercise, metformin, exosome therapy, sulforaphane/broccoli extract, NR/NAD+, antioxidants, fish oil/omega, resveratrol, minerals, herbal supplements, vitamins, HRT, stem cell therapy, workout supplements, TA-65, senolytics, nicotinamide adenine dinucleotide (NAD) therapy, rapamycin, and dehydroepiandrosterone (DHEA). Each intervention question was recorded as a binary variable and no interventions were aggregated to create binary variables.
+
+## Outcome
+
+The primary outcome was DunedinPACE [@belskyDunedinPACEDNAMethylation2022]. DunedinPACE is expressed as years of biological aging per calendar year. Theoretically, a DunedinPACE value of 1.0 indicates that a person is aging at the same average speed as the cohort on which DunedinPACE was trained. Values below 1.0 indicate slower than average aging, while values above 1.0 indicate accelerated aging. In sensitivity analyses, 20 other DNAm biomarkers were used to evaluate robustness of our main results (@suppfig-heatmap-ipw, @suppfig-heatmap-gcomp).
+
+## Covariate Selection
+
+We selected potential confounders using a directed acyclic graph (DAG) informed by established biological and epidemiological evidence [@greenlandCausalDiagramsEpidemiologic1999; @hernanCausalInferenceWhat2020] (@suppfig-dag). The primary adjustment set comprised chronological age, biological sex, education level, tobacco use, alcohol consumption frequency, exercise frequency, body mass index, self-reported stress level, and average hours of sleep per night. We assumed that these covariates reflected pre-intervention confounding factors rather than downstream consequences of intervention use. Tobacco use was recoded as a binary variable (non-smokers vs. smokers) to reduce sparsity. Diet and exercise type were omitted from the primary adjustment set because of missingness and added separately in sensitivity analyses (@suppfig-sensitivity-diet, @supptbl-sensitivity-diet, @suppfig-sensitivity-exercise-type, @supptbl-sensitivity-exercise-type).
+
+## Statistical Analysis
+
+Throughout the manuscript, “main analysis” refers to the analyses of DunedinPACE in the complete-case sample after the exclusions described above, without subgroup stratification, using IPW and G-computation with the primary covariate adjustment set.
+
+### Missing Data and Selection Bias
+
+To assess potential selection bias from exclusions due to missing covariate data, baseline characteristics between the final analytical sample (n = `r format(n_complete_case, big.mark = ",")`) and those who satisfied all preceding eligibility criteria but were excluded at the final step solely for missing at least one covariate (n = `r format(n_excluded_missing_covariate, big.mark = ",")`) (@suppfig-flowchart) were compared. SMDs were computed to quantify the magnitude of differences across covariates. We considered an absolute SMD < 0.1 as indicative of negligible difference between populations [@austinBalanceDiagnosticsComparing2009].
+
+### Descriptive Baseline Comparisons
+
+Baseline characteristics were compared between two groups of participants with DunedinPACE <1.0 and ≥1.0 using the Wilcoxon rank-sum test, Pearson’s chi-square test, and Welch’s t-test. All tests were two-sided, with statistical significance defined at p < 0.05. Statistically significant differences are reported in the Results section.
+
+### Estimation of Average Treatment Effects
+
+The average treatment effect (ATE) represents the difference in mean DunedinPACE that would be observed if everyone in the target population received the intervention compared with if no one received it. Under the assumptions of no unmeasured confounding, positivity and correct model specification, Inverse Probability Weighting (IPW) and G-computation estimate this population-level causal effect using observational data [@hernanCausalInferenceWhat2020].
+
+To estimate the ATEs of geroprotective interventions on DunedinPACE, we employed two complementary causal inference methods: IPW and G-computation. In both methods, the exact same set of covariates was utilized. Chronological age, body mass index, and self-reported stress level (measured on a discrete 0-10 scale) were included as continuous variables. Biological sex, education level, tobacco use, alcohol consumption frequency, exercise frequency, and average hours of sleep per night were included as categorical variables. Furthermore, no interaction terms were included in any of the models.
+
+For G-computation [@hernanCausalInferenceWhat2020], we fitted a multivariable linear regression model. Next, for each individual, we predicted DunedinPACE under two hypothetical scenarios: one in which everyone received the intervention (exposure = 1) and one in which no one received the intervention (exposure = 0), while retaining each individual’s observed covariate values. Predictions were averaged across all individuals within each scenario, and the ATE was calculated by subtracting the mean predicted outcome under exposure = 0 from the mean predicted outcome under exposure = 1. 
+
+For IPW [@hernanCausalInferenceWhat2020], we used a logistic regression model with the primary set of covariates. For each intervention, propensity scores were estimated separately, and individuals were assigned weights equal to the inverse of their estimated probability, creating a weighted pseudopopulation intended to balance measured confounders between users and non-users. The ATE was calculated by subtracting the weighted mean DunedinPACE among non-users from that among users.
+
+For presentation, ATEs and their 95% confidence limits were multiplied by 100 and expressed as percentages of the reference pace of 1 biological year per calendar year (DunedinPACE = 1.0). These estimates represent absolute differences in DunedinPACE on this reference scale. A conversion example and reporting exceptions are provided in the Supplementary Methods. ATEs were also converted to days of biological aging per calendar year by multiplying the absolute DunedinPACE difference by 365. Negative ATE values indicate slower aging, and positive values indicate faster aging. Covariate balance after weighting was assessed with an absolute |SMD| < 0.1 considered indicative of adequate balance [@austinBalanceDiagnosticsComparing2009].
+
+For all analyses, we used non-parametric bootstrap resampling with 1,000 iterations. In each iteration, we resampled individuals with replacement, refitted the propensity-score model for IPW or the outcome model for G-computation, and re-estimated the ATE. The 95% confidence intervals were the 2.5th and 97.5th percentiles of the bootstrap ATE distribution.
+
+For ATE estimates from our analyses, we use “significant” (or “statistically significant”) and “95% confidence interval excluding zero” interchangeably; “not statistically significant” denotes a 95% confidence interval that includes zero.
+
+## Exercise Frequency Analysis
+
+We separately examined the association between exercise frequency and DunedinPACE, using individuals who reported never exercising as the reference group. Each exercise frequency category (1–2, 3–4, 5–7, and ≥8 times per week) was compared with the reference group using IPW and G-computation. Each comparison was conducted separately in a subset comprising individuals in the respective exercise frequency category and those who never exercised. Exercise frequency was not included in the covariate adjustment set, as it was the exposure variable in these analyses.
+
+## Subgroup Analyses
+
+To explore whether ATEs varied by sex, age, and ethnicity, we conducted subgroup analyses stratified by sex (men/women), age (below vs at/above the within-cohort median chronological age of `r round(median_age, 1)` years), and ethnicity (European vs non-European ancestry). For metformin, we additionally stratified analyses by exercise frequency of less than five versus five or more times per week. Within each subgroup, new propensity scores and inverse probability weights were calculated. The stratifying variable was excluded from the covariate adjustment set for the corresponding subgroup analysis. When point estimates and their confidence intervals were broadly similar across the corresponding subgroups in both IPW and G-computation analyses, we considered the differences between subgroups to be negligible.
+
+## Sensitivity Analyses
+
+To address influence of extreme weights, particularly for less reported interventions, we conducted a sensitivity analysis across all interventions. We examined propensity-score overlap plots and re-estimated ATEs using inverse probability weights truncated at the 1st and 99th percentiles.
+We conducted two additional sensitivity analyses to assess how additional adjustment for main diet (meat+vegetables/vegetables/meat+fish/ketogenic) and exercise type (strength/endurance/balance/flexibility) affect our estimates for each intervention. Because these variables had substantial missingness (6.4% and 7.6%, respectively), including them in the main models would have reduced statistical power. Thus, we re-estimated the effects in the complete case subsets with available data on the corresponding variable. We compared the resulting estimates with those from the main analysis to assess whether omitting these variables may have introduced confounding bias. If point estimates remained similar, we considered this as a reassurance that additional adjustment did not alter the findings. The wider confidence intervals in the sensitivity analysis were largely driven by reduced statistical power due to the smaller sample size.  We also repeated the main analysis with vitamin use included as a covariate rather than exposure. 
+Exploratory analyses extended the main IPW and G-computation models to additional DNAm biomarkers. All outcomes except DunedinPACE showed a strong correlation with chronological age (see details in Supplementary methods), therefore, to remove age-related variation in the biomarkers, they were regressed on chronological age. To be able to compare treatment effects across biomarkers measured on different scales, the resulting residuals were standardized before modeling. DunedinPACE was standardized directly without age residualization, retaining the main-analysis method (see details in Supplementary Methods). The resulting ATEs presented in standard deviation (SD) units were displayed in hierarchically clustered heatmaps (@suppfig-heatmap-ipw, @suppfig-heatmap-gcomp).
+
+To assess the influence of concurrent intervention use, we conducted a mutual-adjustment sensitivity analysis using the fixed set of 12 interventions, including workout supplements with its borderline IPW result: antioxidants, fish oil/omega, workout supplements, herbal supplements, vitamins, minerals, NR/NAD+ supplements, sulforaphane/broccoli extract, resveratrol, metformin, exosome therapy, and stem cell therapy (@suppfig-sensitivity-mutual-adjustment, @supptbl-sensitivity-mutual-adjustment). Each intervention was evaluated separately as the exposure, with the remaining 11 interventions added to the nine main covariates in both the propensity-score model and the G-computation outcome model. Further details are provided in the Supplementary Methods.
+
+To explore whether commonly used intervention combinations were associated with larger effect estimates than the corresponding individual interventions, we also examined the 10 most frequent exact-use combinations involving at least two of the 18 pharmacological interventions in the main analytical cohort. Combinations were counted and ordered using the same intervention definitions, missing-response-to-non-use convention, and frequency tie ordering as in @suppfig-upset. For each selected combination, we compared participants who reported that exact combination with everyone else, including those reporting no interventions, a single intervention, or a different combination. Otherwise, the exact same method as the main analysis was used. The supplementary figure and table present these estimates with the obtained main-analysis estimates only for individual interventions occurring in at least one of the selected combinations. These estimates are ordered according to the IPW point estimates. 
+
+## Statistical Software
+
+All analyses were performed using R version 4.6.2. Details of the implemented functions and packages are provided in the Supplementary Methods.
+
+## Data Availability
+
+The data that support the findings of this study are available from TruDiagnostic upon reasonable request and approval by them.
+
+## Code Availability
+
+The analysis code is available at https://github.com/DWS-KI/Effects-of-Interventions-on-DunedinPACE.
+
+## Acknowledgements
+We would like to thank all the TruDiagnostic participants who generously contributed their biological samples and survey data to this study. We also thank the laboratory and data management staff at TruDiagnostic for their assistance with sample processing and data extraction. Finally, we thank Andrea Maier, Sanju Sinha and Arne Søraas for valuable discussions and constructive feedback on the analyses.
+
+## Funding
+
+The study was supported by grants to S.H. from the Swedish Research Council (2022-01608), Karolinska Institutet Delfinansiering for doctoral studies, the National Institute on Aging (1R01AG067996), and Swedish Cancer Society. Tove Fall acknowledges financial support from the Swedish Research Council (VR 2025-02673), the Swedish Heart-Lung Foundation (Hjärt-Lungfonden, 2023-0687), Diabetesfonden (DIA2025-988), and the Göran Gustafsson Foundation for Research in Natural Sciences and Medicine.
+
+## Competing Interests
+
+Natàlia Carreras-Gallo, Ryan Smith and Varun Dwaraka are employees of TruDiagnostic, which provided the data used in this study. Daniel Wikström Shemer, Shayan Mostafaei, Yuliya Leontyeva, Tove Fall and Sara Hägg declare no competing interests.
+
+## Acknowledgment of the Use of Generative AI
+
+AI was used to improve language clarity and flow. The authors take full responsibility for the content of this publication.
+
+# Supplementary_Information.pdf
+
+## Supplementary Methods
+
+### Effect Scale and Conversion
+
+To recover the absolute difference in DunedinPACE units (biological years per calendar year), divide the numerical value of the displayed ATE percentage and each confidence limit by 100, retaining their signs. For example, an ATE of −2% with a 95% CI of −3% to −1% corresponds to an absolute difference of −0.020 with a 95% CI of −0.030 to −0.010. 
+
+Note that the biomarker heatmaps and Supplementary Data S1 and S2 report ATEs and confidence intervals in outcome SD units, obtained by standardizing outcomes once before modeling, as described below. These estimates cannot be multiplied by 100 to recover absolute differences in biomarker units.
+
+### Survey Classification Algorithm
+
+Records with collection timestamps before May 1, 2023 at 20:00 were assigned to Survey 1 regardless of questionnaire responses. At or after this cutoff, classification used version-specific questionnaire items because survey deployment periods overlapped. Records with missing or unparseable collection dates were excluded by the date-classification procedure.
+
+To identify Survey 1 records at or after the cutoff, we assessed eight variables unique to surveys 2 and 3: Hours Sedentary Remaining Awake, Primary Diet Past Year, Strictly Followed, Red Meat Times per Week, Processed Food Times per Week, Feel Well Rested Days per Week, Screens Before Bed, and Track Sleep Wearable Device. Records lacking data for all these variables were classified as Survey 1 and used in this study.
+
+### Sample Exclusions
+
+From the initial `r format(exd_table$n_left[1], big.mark = ",")` individuals classified as Survey 1 users, we applied sequential exclusion criteria to define the analytical sample (@suppfig-flowchart). We first excluded `r format(exd_table$n_right[1], big.mark = ",")` individuals with missing array information or an array designation other than EPICv1, retaining only samples with a recorded EPICv1 designation. We then excluded `r format(exd_table$n_right[2], big.mark = ",")` individuals with missing or “Other” biological sex. Next, `r format(exd_table$n_right[3], big.mark = ",")` individuals reporting PCOS, type 2 diabetes, gestational diabetes, or prediabetes were excluded because these conditions are indications for metformin use, which was the primary intervention this study aimed to evaluate. Missing status for these conditions did not itself trigger exclusion. Age-based exclusions removed `r format(exd_table$n_right[4], big.mark = ",")` individuals with missing chronological age, age younger than 18 years, or age older than 110 years. We further excluded `r format(exd_table$n_right[5], big.mark = ",")` individuals with missing DunedinPACE or biologically implausible zero or negative values, potentially representing technical errors. An additional `r format(exd_table$n_right[6], big.mark = ",")` individuals with extreme underweight (BMI \< 15 kg/m²), potentially indicating severe illness or data entry errors, were excluded. Finally, `r format(exd_table$n_right[7], big.mark = ",")` individuals who satisfied all preceding eligibility criteria but had missing data in at least one remaining primary-model covariate (education level, tobacco use, alcohol consumption, exercise frequency, BMI, stress level, or sleep duration) were excluded. Individuals with missing chronological age and biological sex had already been excluded at earlier steps. The final analytical sample comprised `r format(exd_table$n_left[nrow(exd_table)], big.mark = ",")` individuals.
+
+### Self-Reported Conditions
+
+Self-reported conditions were summarized among participants remaining after all main-analysis exclusions shown in @suppfig-flowchart. The questionnaire fields regarding cancer diagnosis, cardiovascular, respiratory conditions, endocrine conditions, skin and hair, gastrointestinal, genitourinary, musculoskeletal, neuropsychological, reproductive, and immune were each converted to a binary indicator. Because participants could enter free text in these survey fields, a binary categorization was used to summarize whether any condition was reported within each category. After removing surrounding whitespace and ignoring capitalization, responses of "None", "No", or "NA", as well as missing or blank responses, were coded as 0, signifying no condition. All other responses were coded as 1. @supptbl-self-reported-afflictions reports the number and percentage coded as 1, overall and separately for DunedinPACE < 1 and DunedinPACE ≥ 1. Percentages use all participants in the respective group as the denominator, including those with missing responses. Individuals with missing responses for a given category were classified as healthy for that category. Each participant was counted at most once per category, even if multiple conditions were reported within that category, and could contribute to multiple categories.
+
+### Sensitivity Analysis for Extreme Weights 
+
+We compared estimates obtained using the standard weights from the main analysis with those obtained using truncated weights to assess sensitivity to extreme weights (@supptbl-extreme-weights and @suppfig-extreme-weights). Truncation thresholds were the 1st and 99th percentiles of the standard weights in the intervention-specific analytical sample, pooling both exposure groups. Weights outside these thresholds were replaced by the corresponding threshold, retaining all participants in the analysis. Otherwise, ATEs were estimated using the same method as the main analysis.
+
+### Comparison of Effects Across DNAm Biomarkers
+
+To compare treatment effects across DNAm biomarkers, heatmaps were generated using the same IPW and G-computation methods as the main analysis. However, for every DNAm biomarker except DunedinPACE, we fitted a linear regression model with only age as a covariate. The obtained age-adjusted residuals were standardized. DunedinPACE was standardized directly without age residualization, retaining the same method as in the main analysis. Age residualization was applied to all other biomarkers to remove age-related variation in the biomarkers, because these biomarkers had strong correlations with chronological age (Pearson r between `r sprintf("%.2f", heatmap_review$age_correlations$other_min_abs)` and `r sprintf("%.2f", heatmap_review$age_correlations$other_max_abs)`). Since DunedinPACE had a weaker correlation (Pearson r `r sprintf("%.2f", heatmap_review$age_correlations$dunedin)`), the biomarker was only standardized. 
+
+The shared eligibility criteria (@suppfig-flowchart) were retained, but outcome eligibility was assessed separately for each biomarker. For all DNAm biomarkers, raw values had to be finite and greater than zero before standardization and residualization, as other values were considered potential indicators of technical error. Consequently, analytical sample sizes differed from the primary DunedinPACE analysis and between biomarkers because of differences in missing or invalid measurements. A missing DunedinPACE value did not itself exclude a participant from analyses of other biomarkers. ATE estimates represent standardized outcome differences in standard deviation (SD) units. 
+
+Biomarkers were clustered with similar estimated ATEs across all interventions. Clustering was performed independently for the IPW (@suppfig-heatmap-ipw) and G-computation (@suppfig-heatmap-gcomp) heatmaps using Euclidean distance and complete linkage, which defines the distance between two clusters as the maximum pairwise distance between their members [@hubertDataAnalysisSingleLink1976]. ATE estimates in heatmaps for Telomere.Values.PC and DNAmVO2max were multiplied by −1 for display and clustering so that assumed favorable effects had a consistent direction across biomarkers. Cell stars in heatmaps identify 95% bootstrap confidence intervals from IPW and G-computation strictly excluding zero.
+
+The numerical values underlying @suppfig-heatmap-ipw and @suppfig-heatmap-gcomp are provided in Supplementary Data S1 (IPW; `Supplementary_Data_S1_IPW.xlsx`) and Supplementary Data S2 (G-computation; `Supplementary_Data_S2_G-comp.xlsx`), respectively. These Excel files include original standardized estimates, their 95% confidence intervals, displayed estimates, the completed bootstrap counts for each comparison and biomarker correlations with chronological age, together with definitions. The exact numbers of treated and control participants after all exclusions are reported as `n_treated` and `n_control`. The column `n_reference` reports the number of eligible participants used to standardize each biomarker.
+
+## Supplementary @suppfig-flowchart: Study Population Flowchart
+
+::::: {#suppfig-flowchart suppfig-align="left"}
+
+```{r}
+#| fig-align: left
+# Display the flowchart that is saved in Output folder
+knitr::include_graphics(here::here("Output", "flowchart_study_population_steps1234.png"))
+```
+
+**Study population flowchart.** Flow chart showing the sequential exclusion process used to derive the final analytical sample from respondents to Survey 1, one of three versions of TruDiagnostic’s self-administered lifestyle and health questionnaire. The study deployed three different survey versions over time which altered key questions; the analysis was restricted to Survey 1 respondents because combining these heterogeneous versions would introduce missing data and harmonization challenges, potentially biasing covariate adjustments. Participants were excluded for missing array information or a non-EPICv1 designation, missing or “Other” biological sex, reported conditions indicating metformin use, missing chronological age or age outside the eligible range, missing or nonpositive DunedinPACE, extreme underweight, and, among those remaining eligible, missing primary-model covariate data. Restriction to recorded EPICv1 samples addressed potential confounding from array differences and the need to impute missing DunedinPACE probes. The numbers shown at each step indicate the remaining study population after each exclusion and the number removed by the corresponding criterion.
+
+:::::
+
+## Supplementary @suppfig-love-plot-excluded: Confounder Balance Between Complete-Case and Excluded Individuals
+
+::::: {#suppfig-love-plot-excluded suppfig-align="left"}
+
+```{r}
+#| fig-align: left
+#| echo: false
+
+# Display the Love plot for complete case analysis vs excluded individuals
+knitr::include_graphics(here::here("Output", "love_plots", "main_sample_vs_excluded_due_to_missing_covs", "love_plot_main_vs_excluded.png"))
+```
+
+**Confounder balance between the complete-case population and excluded individuals.** Love plot showing standardized mean differences (SMDs) for baseline confounders comparing the final complete-case population with individuals who satisfied the preceding eligibility criteria but were excluded at the final step solely due to missing covariate data. Each point represents the SMD for one confounder, and the dashed vertical lines at \|SMD\| = 0.1 indicate the conventional threshold for meaningful imbalance. Positive SMDs indicate higher values for continuous covariates or higher proportions in the listed categories in the excluded group compared with the complete-case population; negative SMDs indicate lower values for continuous covariates or lower proportions in the listed categories in the excluded group compared with the complete-case population. The plot was used to assess potential selection bias introduced by complete-case analysis.
+
+:::::
+
+## Supplementary @supptbl-excluded-characteristics
+
+::::: {#supptbl-excluded-characteristics supptbl-align="left"}
+
+```{r}
+#| echo: false
+#| include: false
+#| cache: false
+
+# The table1_excluded_df now contains: Variable, Level, Complete Case, Excluded, SMD
+# Apply display names to the Variable column for reader-friendly output
+# Reorder levels within each variable group for proper ordinal display
+table1_excluded_display <- table1_excluded_df |>
+  reorder_table_levels(level_col = "Level") |>
+  mutate(Variable = sapply(Variable, function(v) {
+    if (is.na(v) || v == "" || v == "N") return(v)
+    format_display_name(v)
+  }))
+
+# Display comparison table
+flextable(table1_excluded_display) |>
+  fontsize(size = 10, part = "all") |>
+  padding(padding = 2, part = "all") |>
+  autofit() |>
+  set_table_properties(layout = "autofit", width = 1, align = "left")
+
+register_supplementary_table(supplementary_export, "supptbl-excluded-characteristics", table1_excluded_display)
+```
+
+Full table, title, and caption: see the accompanying supplementary tables Excel workbook.
+
+Worksheet @supptbl-excluded-characteristics.
+
+:::::
+
+## Supplementary @supptbl-self-reported-afflictions: Self-Reported Conditions by Category
+
+::::: {#supptbl-self-reported-afflictions supptbl-align="left"}
+
+```{r}
+#| echo: false
+
+flextable(table1_afflictions_df) |>
+  fontsize(size = 10, part = "all") |>
+  padding(padding = 2, part = "all") |>
+  autofit() |>
+  set_table_properties(layout = "autofit", width = 1, align = "left")
+```
+
+**Self-reported conditions in the final analytical sample.** Values are n (%). Condition percentages use the full population in each column after all main-analysis exclusions, including participants with missing responses. "None", "no", "none", "No", "NA", missing values, and blank responses do not count as reported conditions; all other responses do. Participants may contribute to multiple categories but are counted only once within each category. Percentages in the N row indicate each group's share of the overall analytical sample after exclusions.
+
+:::::
+
+## Supplementary @suppfig-concurrent-treatments: Distribution of Concurrent Pharmacological Interventions
+
+::::: {#suppfig-concurrent-treatments suppfig-align="left"}
+
+```{r}
+#| fig-align: left
+#| fig-width: 8
+#| fig-height: 5
+#| echo: false
+
+knitr::include_graphics(here::here("Output", "concurrent_treatments_histogram.png"))
+```
+
+**Distribution of concurrent pharmacological interventions.** Histogram showing the number of simultaneously used pharmacological interventions among all participants after exclusions, including those reporting no use of the 18 pharmacological interventions. The x-axis shows the total number of concurrent interventions per participant and the y-axis shows the percentage of all participants in each category.
+
+:::::
+
+## Supplementary @supptbl-concurrent-treatments: Distribution of Concurrent Pharmacological Interventions
+
+::::: {#supptbl-concurrent-treatments supptbl-align="left"}
+
+```{r}
+#| echo: false
+
+flextable(concurrent_treatments_summary_df) |>
+  colformat_num(j = "Percentage of All Participants", digits = 2, suffix = "%") |>
+  fontsize(size = 10, part = "all") |>
+  padding(padding = 2, part = "all") |>
+  autofit() |>
+  set_table_properties(layout = "autofit", width = 1, align = "left")
+```
+
+**Distribution of concurrent pharmacological interventions.** Table showing the number and percentage of all participants after exclusions according to the total number of concurrently used pharmacological interventions, including those reporting no use of the 18 pharmacological interventions. The table complements @suppfig-concurrent-treatments by providing the exact counts and percentages for each category of concurrent intervention use.
+
+:::::
+
+## Supplementary @suppfig-upset: Intervention Overlap Patterns
+
+::::: {#suppfig-upset suppfig-align="left"}
+
+```{r}
+#| fig-align: left
+#| fig-width: 15
+#| fig-height: 10
+#| echo: false
+
+knitr::include_graphics(here::here("Output", "upset_plot.jpeg"))
+```
+
+**Overlap patterns among pharmacological interventions.** UpSet plot showing the frequency of individual intervention use and the most common combinations of the 18 evaluated pharmacological interventions among participants in the main analytical sample, after exclusions. Horizontal bars indicate the total number of users of each individual intervention, whereas vertical bars indicate the number of participants reporting exactly the intervention combinations marked by the connected dots below, with no use of the other evaluated interventions. The plot demonstrates extensive overlap between interventions, with vitamins being the most commonly used intervention overall and frequent combinations often including vitamins together with fish oil/omega, minerals, and herbal supplements. To maintain readability, the plot shows the 30 most frequent observed intervention-use patterns, ranked by participant count regardless of the number of interventions in each pattern. Less frequent patterns are not displayed even though their users are included in the total counts for individual interventions.
+
+:::::
+
+## Supplementary @suppfig-dag: Directed Acyclic Graph (DAG)
+
+::::: {#suppfig-dag suppfig-align="left"}
+
+```{r}
+#| fig-align: left
+#| echo: false
+
+# Display the DAG figure
+knitr::include_graphics(here::here("DAG.png"))
+```
+
+**Directed Acyclic Graph (DAG) of the causal framework.** The graph depicts hypothesized relationships between pharmacological intervention use (the yellow-green exposure node), DunedinPACE (the blue outcome node marked “I”), and measured and unmeasured covariates. Arrows represent assumed causal pathways based on prior biological and epidemiological knowledge. The red node represents unmeasured health consciousness. White nodes represent measured covariates considered for primary or sensitivity adjustment: diet and exercise type were added separately in sensitivity analyses, while the other white nodes were included in the primary pharmacological intervention models. The other blue nodes represent ethnicity and conditions, which were not included in the adjustment set; exclusions were applied for the specified reported conditions indicating metformin use.
+
+:::::
+
+## Supplementary @supptbl-training-results
+
+::::: {#supptbl-training-results supptbl-align="left"}
+
+```{r}
+#| echo: false
+#| include: false
+#| cache: false
+
+# Load results
+load(here::here("Output", "training_analysis_results.RData"))
+
+# Recover the original diagnostic identifiers from the saved exercise labels.
+training_balance_treatments <- c(
+  "1to2 per week" = "Exercise.1to2.per.week_vs_Never",
+  "3to4 per week" = "Exercise.3to4.per.week_vs_Never",
+  "5to7 per week" = "Exercise.5to7.per.week_vs_Never",
+  "8plus per week" = "Exercise.8plus.per.week_vs_Never"
+)
+
+# Format ATEs as percentages to match other tables, and apply display names
+training_display <- training_results_table |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, `Balance (SMD)`,
+         `ATE (G-comp)`, `95% CI (G-comp)`, `N Treated`, `N Control`) |>
+  mutate(
+    `Balance (SMD)` = format_residual_imbalance(
+      `Balance (SMD)`, training_balance_treatments[as.character(Treatment)], "exercise_effects"
+    ),
+    Treatment = sapply(Treatment, format_display_name),
+    `ATE (IPW)` = sprintf("%.2f%%", `ATE (IPW)` * 100),
+    `95% CI (IPW)` = {
+      # Parse the existing CI string and reformat as percentage
+      ci_vals <- str_extract_all(`95% CI (IPW)`, "-?[0-9]+\\.[0-9]+")
+      sapply(ci_vals, function(v) sprintf("[%.2f%%, %.2f%%]", as.numeric(v[1]) * 100, as.numeric(v[2]) * 100))
+    },
+    `ATE (G-comp)` = sprintf("%.2f%%", `ATE (G-comp)` * 100),
+    `95% CI (G-comp)` = {
+      ci_vals <- str_extract_all(`95% CI (G-comp)`, "-?[0-9]+\\.[0-9]+")
+      sapply(ci_vals, function(v) sprintf("[%.2f%%, %.2f%%]", as.numeric(v[1]) * 100, as.numeric(v[2]) * 100))
+    }
+  ) |>
+  rename(
+    Intervention = Treatment,
+    `Residual imbalance` = `Balance (SMD)`,
+    `N Exercising` = `N Treated`
+  )
+
+flextable(training_display) |>
+  fontsize(size = 10, part = "all") |>
+  padding(padding = 2, part = "all") |>
+  autofit() |>
+  set_table_properties(layout = "autofit", width = 1, align = "left")
+
+register_supplementary_table(supplementary_export, "supptbl-training-results", training_display)
+```
+
+Full table, title, and caption: see the accompanying supplementary tables Excel workbook.
+
+Worksheet @supptbl-training-results.
+
+:::::
+
+## Supplementary @suppfig-exercise-8plus-balance: Covariate Balance for Exercise 8+ Times per Week Versus Never
+
+::::: {#suppfig-exercise-8plus-balance suppfig-align="left"}
+
+```{r}
+#| fig-align: left
+#| echo: false
+#| out-width: "100%"
+
+knitr::include_graphics(here::here("Output", "love_plots", "exercise_effects", "love_plot_Exercise_8plus_per_week_vs_Never.png"))
+```
+
+**Covariate balance for exercising 8+ times per week versus never exercising.** Love plot showing standardized mean differences (SMDs) for demographic and lifestyle covariates before and after inverse probability weighting (IPW). The dashed vertical lines at \|SMD\| = 0.1 indicate the conventional threshold for adequate balance. Positive SMDs indicate higher values for continuous covariates or higher proportions in the listed categories among individuals exercising 8+ times per week compared with those who never exercise; negative SMDs indicate lower values for continuous covariates or lower proportions in the listed categories among individuals exercising 8+ times per week compared with those who never exercise. After weighting, all covariates met the balance threshold except BMI, which remained lower among individuals exercising 8+ times per week.
+
+:::::
+
+## Supplementary @supptbl-exercise_by_metformin_summary
+
+::::: {#supptbl-exercise_by_metformin_summary supptbl-align="left"}
+
+```{r}
+#| echo: false
+#| include: false
+#| cache: false
+
+# Load the exercise-by-metformin summary table created in step 17
+load(here::here("Output", "exercise_by_metformin_summary"))
+
+# Apply display names to Analysis column
+exercise_by_metformin_summary_display <- exercise_by_metformin_summary |>
+  select(Analysis, `ATE (IPW)`, `CI (IPW)`, SMD, `ATE (G-comp)`, `CI (G-comp)`,
+         `N 5+ times/wk`, `N 0-4 times/wk`) |>
+  mutate(
+    SMD = format_residual_imbalance(SMD, "Exerc_more_than_4x", Analysis),
+    Analysis = sapply(Analysis, format_display_name)
+  ) |>
+  rename(`Residual imbalance` = SMD)
+
+# Display the Metformin summary table as a flextable
+exercise_by_metformin_summary_flextable <- flextable(exercise_by_metformin_summary_display) |>
+  fontsize(size = 10, part = "all") |>
+  padding(padding = 2, part = "all") |>
+  autofit() |>
+  set_table_properties(layout = "autofit", width = 1, align = "left")
+
+# Print the flextable
+exercise_by_metformin_summary_flextable
+
+register_supplementary_table(supplementary_export, "supptbl-exercise_by_metformin_summary", exercise_by_metformin_summary_display)
+```
+
+Full table, title, and caption: see the accompanying supplementary tables Excel workbook.
+
+Worksheet @supptbl-exercise_by_metformin_summary.
+
+:::::
+
+## Supplementary @supptbl-metformin-summary
+
+::::: {#supptbl-metformin-summary supptbl-align="left"}
+
+```{r}
+#| echo: false
+#| include: false
+#| cache: false
+
+# Load the metformin summary table created in step 18
+load(here::here("Output", "metformin_summary"))
+
+# Apply display names to Analysis column
+metformin_summary_display <- metformin_summary |>
+  select(Analysis, `ATE (IPW)`, `CI (IPW)`, SMD, `ATE (G-comp)`, `CI (G-comp)`,
+         `N Users`, `N Non-users`) |>
+  mutate(
+    SMD = format_residual_imbalance(SMD, "Metformin", Analysis),
+    Analysis = sapply(Analysis, format_display_name)
+  ) |>
+  rename(`Residual imbalance` = SMD)
+
+# Display the Metformin summary table as a flextable
+metformin_summary_flextable <- flextable(metformin_summary_display) |>
+  fontsize(size = 10, part = "all") |>
+  padding(padding = 2, part = "all") |>
+  autofit() |>
+  set_table_properties(layout = "autofit", width = 1, align = "left")
+
+# Print the flextable
+metformin_summary_flextable
+
+register_supplementary_table(supplementary_export, "supptbl-metformin-summary", metformin_summary_display)
+```
+
+Full table, title, and caption: see the accompanying supplementary tables Excel workbook.
+
+Worksheet @supptbl-metformin-summary.
+
+:::::
+
+## Supplementary @supptbl-comparison-results
+
+::::: {#supptbl-comparison-results supptbl-align="left"}
+
+```{r}
+#| echo: false
+#| include: false
+#| cache: false
+
+# Load both results
+load(here::here("Output", "IPW_results_df"))
+load(here::here("Output", "Standardization_results_df"))
+
+# Prepare IPW results
+ipw_formatted <- IPW_results_df |>
+  mutate(
+    SMD = format_residual_imbalance(SMD, treatment, "main"),
+    Treatment = treatment,
+    `ATE (IPW)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (IPW)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100),
+    ipw_ate = ate_estimate
+  ) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, SMD, ipw_ate)
+
+# Prepare Standardization results
+std_formatted <- Standardization_results_df |>
+  mutate(
+    Treatment = treatment,
+    `ATE (G-comp)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (G-comp)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100)
+  ) |>
+  select(Treatment, `ATE (G-comp)`, `95% CI (G-comp)`)
+
+# Merge results side by side and sort by IPW effect estimate
+comparison_table <- ipw_formatted |>
+  left_join(std_formatted, by = "Treatment") |>
+  mutate(
+    `N Treated` = IPW_results_df$n_treated,
+    `N Control` = IPW_results_df$n_control,
+    `Balance (SMD)` = SMD
+  ) |>
+  arrange(ipw_ate) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, `Balance (SMD)`,
+         `ATE (G-comp)`, `95% CI (G-comp)`,
+         `N Treated`, `N Control`) |>
+  rename(
+    `CI (IPW)` = `95% CI (IPW)`,
+    `CI (G-comp)` = `95% CI (G-comp)`,
+    `Residual imbalance` = `Balance (SMD)`,
+    `N Users` = `N Treated`,
+    `N Non-users` = `N Control`
+  )
+
+# Apply display names to Treatment column for reader-friendly output
+comparison_table <- comparison_table |>
+  mutate(Treatment = sapply(Treatment, format_display_name)) |>
+  rename(Intervention = Treatment)
+
+# Display the comparison table as a flextable
+comparison_table_flextable <- flextable(comparison_table) |>
+  fontsize(size = 10, part = "all") |>
+  padding(padding = 2, part = "all") |>
+  autofit() |>
+  set_table_properties(layout = "autofit", width = 1, align = "left")
+
+# Print the flextable
+comparison_table_flextable
+
+register_supplementary_table(supplementary_export, "supptbl-comparison-results", comparison_table)
+```
+
+Full table, title, and caption: see the accompanying supplementary tables Excel workbook.
+
+Worksheet @supptbl-comparison-results.
+
+:::::
+
+## Supplementary @suppfig-rapamycin-ta65-balance: Covariate Balance for Rapamycin and TA-65
+
+::::: {#suppfig-rapamycin-ta65-balance suppfig-align="center"}
+
+```{r}
+#| fig-align: center
+#| fig-width: 6
+#| fig-height: 7.6
+#| fig-dpi: 300
+#| dev: png
+#| echo: false
+#| out-width: "6in"
+
+local({
+  panel_files <- c("love_plot_Rapamycin.png", "love_plot_TA_65.png")
+  panel_labels <- c("A", "B")
+
+  # Keep both complete images and their labels inside one fixed-size figure.
+  grid::grid.newpage()
+  grid::pushViewport(grid::viewport(layout = grid::grid.layout(
+    nrow = 4, ncol = 1,
+    heights = grid::unit(c(0.2, 3.6, 0.2, 3.6), "in")
+  )))
+  for (i in seq_along(panel_files)) {
+    grid::pushViewport(grid::viewport(layout.pos.row = 2 * i - 1))
+    grid::grid.text(panel_labels[i], x = grid::unit(2, "pt"), just = "left",
+                    gp = grid::gpar(fontsize = 12, fontface = "bold"))
+    grid::popViewport()
+
+    panel_image <- png::readPNG(here::here("Output", "love_plots", "main", panel_files[i]))
+    grid::pushViewport(grid::viewport(layout.pos.row = 2 * i))
+    # Specifying width alone preserves the source image's aspect ratio.
+    grid::grid.raster(panel_image, width = grid::unit(1, "npc"), interpolate = TRUE)
+    grid::popViewport()
+  }
+  grid::popViewport()
+})
+```
+
+**Covariate balance for rapamycin and TA-65.** Love plots showing standardized mean differences (SMDs) for demographic and lifestyle covariates before and after inverse probability weighting (IPW), comparing **(A)** rapamycin users with non-users and **(B)** TA-65 users with non-users. Points represent unweighted and weighted SMDs, as indicated in the legends. Dashed vertical lines at \|SMD\| = 0.1 mark the conventional threshold for adequate balance (\|SMD\| < 0.1). Positive SMDs indicate higher values for continuous covariates or higher proportions in the listed categories among users of the respective intervention compared with non-users; negative SMDs indicate lower values for continuous covariates or lower proportions in the listed categories among users of the respective intervention compared with non-users. Residual covariate imbalance remained after weighting for both interventions, warranting caution when interpreting their effect estimates.
+
+:::::
+
+## Supplementary @suppfig-extreme-weights: Sensitivity Analysis: Extreme Weights
+
+::::: {#suppfig-extreme-weights suppfig-align="left"}
+
+```{r}
+#| fig-align: left
+#| fig-width: 10
+#| fig-height: 8.89
+#| echo: false
+
+knitr::include_graphics(here::here("Output", "IPW_diagnostics_plots", "comparative_diagnostics_forest_plot.png"))
+```
+
+**Sensitivity analysis for extreme weights.** ATE, average treatment effect; IPW, inverse probability weighting. Forest plot showing the estimated average treatment effects on DunedinPACE using standard IPW alongside a method testing robustness: truncated weights capped at the 1st and 99th percentiles (outlier capping). Circles represent point estimates and capped horizontal lines represent 95% confidence intervals. The dashed vertical line indicates no effect (ATE = 0). Concordance across the weighting methods builds confidence that estimates are not driven by extreme weights. ATE percentages and their 95% confidence limits express absolute DunedinPACE differences as percentages of the reference pace of 1 biological year per calendar year. Divide the displayed ATE percentage and each confidence limit by 100, retaining their signs, to recover absolute differences in DunedinPACE units.
+
+:::::
+
+## Supplementary @supptbl-extreme-weights
+
+::::: {#supptbl-extreme-weights supptbl-align="left"}
+
+```{r}
+#| echo: false
+#| include: false
+#| cache: false
+
+diagnostics_table_display <- diagnostics_table |>
+  select(
+    Treatment, N_Treated, N_Control,
+    ATE_Standard, CI_Lower_Standard, CI_Upper_Standard,
+    ATE_Truncated, CI_Lower_Truncated, CI_Upper_Truncated
+  ) |>
+  arrange(ATE_Standard) |>
+  mutate(
+    Treatment = vapply(Treatment, format_display_name, character(1), USE.NAMES = FALSE),
+    across(
+      c(ATE_Standard, CI_Lower_Standard, CI_Upper_Standard,
+        ATE_Truncated, CI_Lower_Truncated, CI_Upper_Truncated),
+      ~ sprintf("%.2f%%", .x * 100)
+    )
+  ) |>
+  rename_with(~ gsub("_", " ", .x, fixed = TRUE))
+
+register_supplementary_table(supplementary_export, "supptbl-extreme-weights", diagnostics_table_display)
+```
+
+Full table, title, and caption: see the accompanying supplementary tables Excel workbook.
+
+Worksheet @supptbl-extreme-weights.
+
+:::::
+
+## Supplementary @suppfig-sensitivity-diet: Effects of Pharmacological Interventions on DunedinPACE – Sensitivity Analysis with Diet Adjustment vs Main Analysis
+
+::::: {#suppfig-sensitivity-diet suppfig-align="left"}
+
+```{r}
+#| fig-align: left
+#| fig-width: 13
+#| fig-height: 9.91
+#| echo: false
+
+load(here::here("Output", "Forest_plots", "sensitivity_diet_forest_plot"))
+plot
+```
+
+**Sensitivity analysis with additional adjustment for primary diet compared to main analysis.** Forest plot showing average treatment effects (ATEs) of the evaluated pharmacological interventions on DunedinPACE after adding main diet pattern to the confounder adjustment set, overlaid with the main analysis. **(A)** Inverse probability weighting (IPW). **(B)** G-computation. Each panel overlays the sensitivity analysis and main analysis, with the same intervention order and effect scale in both panels. Circles represent point estimates and capped horizontal lines represent 95% confidence intervals; the dashed vertical line indicates no effect (ATE = 0). The figure was used to assess whether the main findings were robust to additional control for dietary pattern. ATE percentages and their 95% confidence limits express absolute DunedinPACE differences as percentages of the reference pace of 1 biological year per calendar year. Divide the displayed ATE percentage and each confidence limit by 100, retaining their signs, to recover absolute differences in DunedinPACE units.
+
+:::::
+
+## Supplementary @supptbl-sensitivity-diet
+
+::::: {#supptbl-sensitivity-diet supptbl-align="left"}
+
+```{r}
+#| echo: false
+#| include: false
+#| cache: false
+
+# Load both sensitivity results
+load(here::here("Output", "IPW_sensitivity_diet_df"))
+load(here::here("Output", "Standardization_sensitivity_diet_df"))
+
+# Prepare IPW results
+ipw_sens_formatted <- IPW_sensitivity_diet_df |>
+  mutate(
+    SMD = format_residual_imbalance(SMD, treatment, "sensitivity_diet"),
+    Treatment = treatment,
+    `ATE (IPW)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (IPW)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100),
+    ipw_ate = ate_estimate
+  ) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, SMD, ipw_ate)
+
+# Prepare Standardization results
+std_sens_formatted <- Standardization_sensitivity_diet_df |>
+  mutate(
+    Treatment = treatment,
+    `ATE (G-comp)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (G-comp)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100)
+  ) |>
+  select(Treatment, `ATE (G-comp)`, `95% CI (G-comp)`)
+
+# Merge results side by side and sort by IPW effect estimate
+sensitivity_comparison_table <- ipw_sens_formatted |>
+  left_join(std_sens_formatted, by = "Treatment") |>
+  mutate(
+    `N Treated` = IPW_sensitivity_diet_df$n_treated,
+    `N Control` = IPW_sensitivity_diet_df$n_control,
+    `Balance (SMD)` = SMD
+  ) |>
+  arrange(ipw_ate) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, `Balance (SMD)`,
+         `ATE (G-comp)`, `95% CI (G-comp)`,
+         `N Treated`, `N Control`) |>
+  rename(
+    `CI (IPW)` = `95% CI (IPW)`,
+    `CI (G-comp)` = `95% CI (G-comp)`,
+    `Residual imbalance` = `Balance (SMD)`,
+    `N Users` = `N Treated`,
+    `N Non-users` = `N Control`
+  )
+
+# Apply display names to Treatment column
+sensitivity_comparison_table <- sensitivity_comparison_table |>
+  mutate(Treatment = sapply(Treatment, format_display_name)) |>
+  rename(Intervention = Treatment)
+
+# Display the sensitivity comparison table as a flextable
+sensitivity_comparison_table_flextable <- flextable(sensitivity_comparison_table) |>
+  fontsize(size = 10, part = "all") |>
+  padding(padding = 2, part = "all") |>
+  autofit() |>
+  set_table_properties(layout = "autofit", width = 1, align = "left")
+
+# Print the flextable
+sensitivity_comparison_table_flextable
+
+register_supplementary_table(supplementary_export, "supptbl-sensitivity-diet", sensitivity_comparison_table)
+```
+
+Full table, title, and caption: see the accompanying supplementary tables Excel workbook.
+
+Worksheet @supptbl-sensitivity-diet.
+
+:::::
+
+## Supplementary @suppfig-sensitivity-exercise-type: Effects of Pharmacological Interventions on DunedinPACE – Sensitivity Analysis with Exercise Type Adjustment vs Main Analysis
+
+::::: {#suppfig-sensitivity-exercise-type suppfig-align="left"}
+
+```{r}
+#| fig-align: left
+#| fig-width: 13
+#| fig-height: 9.91
+#| echo: false
+
+load(here::here("Output", "Forest_plots", "sensitivity_exercise_type_forest_plot"))
+plot
+```
+
+**Sensitivity analysis with additional adjustment for exercise type compared to main analysis.** Forest plot showing average treatment effects (ATEs) of the evaluated pharmacological interventions on DunedinPACE after adding exercise type to the confounder adjustment set, overlaid with the main analysis. **(A)** Inverse probability weighting (IPW). **(B)** G-computation. Each panel overlays the sensitivity analysis and main analysis, with the same intervention order and effect scale in both panels. Circles represent point estimates and capped horizontal lines represent 95% confidence intervals; the dashed vertical line indicates no effect (ATE = 0). The figure evaluates the robustness of the main results to more detailed control for exercise behavior. ATE percentages and their 95% confidence limits express absolute DunedinPACE differences as percentages of the reference pace of 1 biological year per calendar year. Divide the displayed ATE percentage and each confidence limit by 100, retaining their signs, to recover absolute differences in DunedinPACE units.
+
+:::::
+
+## Supplementary @supptbl-sensitivity-exercise-type
+
+::::: {#supptbl-sensitivity-exercise-type supptbl-align="left"}
+
+```{r}
+#| echo: false
+#| include: false
+#| cache: false
+
+
+# Load both sensitivity results
+load(here::here("Output", "IPW_sensitivity_exercise_type_df"))
+load(here::here("Output", "Standardization_sensitivity_exercise_type_df"))
+
+# Prepare IPW results
+ipw_sens_ex_formatted <- IPW_sensitivity_exercise_type_df |>
+  mutate(
+    SMD = format_residual_imbalance(SMD, treatment, "sensitivity_exercise_type"),
+    Treatment = treatment,
+    `ATE (IPW)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (IPW)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100),
+    ipw_ate = ate_estimate
+  ) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, SMD, ipw_ate)
+
+# Prepare Standardization results
+std_sens_ex_formatted <- Standardization_sensitivity_exercise_type_df |>
+  mutate(
+    Treatment = treatment,
+    `ATE (G-comp)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (G-comp)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100)
+  ) |>
+  select(Treatment, `ATE (G-comp)`, `95% CI (G-comp)`)
+
+# Merge results side by side and sort by IPW effect estimate
+sensitivity_exercise_comparison_table <- ipw_sens_ex_formatted |>
+  left_join(std_sens_ex_formatted, by = "Treatment") |>
+  mutate(
+    `N Treated` = IPW_sensitivity_exercise_type_df$n_treated,
+    `N Control` = IPW_sensitivity_exercise_type_df$n_control,
+    `Balance (SMD)` = SMD
+  ) |>
+  arrange(ipw_ate) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, `Balance (SMD)`,
+         `ATE (G-comp)`, `95% CI (G-comp)`,
+         `N Treated`, `N Control`) |>
+  rename(
+    `CI (IPW)` = `95% CI (IPW)`,
+    `CI (G-comp)` = `95% CI (G-comp)`,
+    `Residual imbalance` = `Balance (SMD)`,
+    `N Users` = `N Treated`,
+    `N Non-users` = `N Control`
+  )
+
+# Apply display names to Treatment column
+sensitivity_exercise_comparison_table <- sensitivity_exercise_comparison_table |>
+  mutate(Treatment = sapply(Treatment, format_display_name)) |>
+  rename(Intervention = Treatment)
+
+# Display the sensitivity exercise comparison table as a flextable
+sensitivity_exercise_comparison_table_flextable <- flextable(sensitivity_exercise_comparison_table) |>
+  fontsize(size = 10, part = "all") |>
+  padding(padding = 2, part = "all") |>
+  autofit() |>
+  set_table_properties(layout = "autofit", width = 1, align = "left")
+
+# Print the flextable
+sensitivity_exercise_comparison_table_flextable
+
+register_supplementary_table(supplementary_export, "supptbl-sensitivity-exercise-type", sensitivity_exercise_comparison_table)
+```
+
+Full table, title, and caption: see the accompanying supplementary tables Excel workbook.
+
+Worksheet @supptbl-sensitivity-exercise-type.
+
+:::::
+
+## Supplementary @suppfig-sensitivity-vitamins: Effects of Pharmacological Interventions on DunedinPACE – Sensitivity Analysis with Vitamin Adjustment vs Main Analysis
+
+::::: {#suppfig-sensitivity-vitamins suppfig-align="left"}
+
+```{r}
+#| fig-align: left
+#| fig-width: 13
+#| fig-height: 9.91
+#| echo: false
+
+load(here::here("Output", "Forest_plots", "sensitivity_vitamins_forest_plot"))
+plot
+```
+
+**Sensitivity analysis with additional adjustment for vitamin use compared to main analysis.** Forest plot showing average treatment effects (ATEs) of the evaluated pharmacological interventions on DunedinPACE after adding vitamin use to the confounder adjustment set, overlaid with the main-analysis estimates for the same 17 interventions. **(A)** Inverse probability weighting (IPW). **(B)** G-computation. Each panel overlays the sensitivity analysis and main analysis, with the same intervention order and effect scale in both panels. Circles represent point estimates and capped horizontal lines represent 95% confidence intervals; the dashed vertical line indicates no effect (ATE = 0). Vitamin use was included as a covariate in both IPW and G-computation and was not evaluated as an exposure in this sensitivity analysis. ATE percentages and their 95% confidence limits express absolute DunedinPACE differences as percentages of the reference pace of 1 biological year per calendar year. Divide the displayed ATE percentage and each confidence limit by 100, retaining their signs, to recover absolute differences in DunedinPACE units.
+
+:::::
+
+## Supplementary @supptbl-sensitivity-vitamins
+
+::::: {#supptbl-sensitivity-vitamins supptbl-align="left"}
+
+```{r}
+#| echo: false
+#| include: false
+#| cache: false
+
+
+# Load both sensitivity results
+load(here::here("Output", "IPW_sensitivity_vitamins_df"))
+load(here::here("Output", "Standardization_sensitivity_vitamins_df"))
+
+# Prepare IPW results
+ipw_sens_vitamins_formatted <- IPW_sensitivity_vitamins_df |>
+  mutate(
+    SMD = format_residual_imbalance(SMD, treatment, "sensitivity_vitamins"),
+    Treatment = treatment,
+    `ATE (IPW)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (IPW)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100),
+    ipw_ate = ate_estimate
+  ) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, SMD, ipw_ate)
+
+# Prepare Standardization results
+std_sens_vitamins_formatted <- Standardization_sensitivity_vitamins_df |>
+  mutate(
+    Treatment = treatment,
+    `ATE (G-comp)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (G-comp)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100)
+  ) |>
+  select(Treatment, `ATE (G-comp)`, `95% CI (G-comp)`)
+
+# Merge results side by side and sort by IPW effect estimate
+sensitivity_vitamins_comparison_table <- ipw_sens_vitamins_formatted |>
+  left_join(std_sens_vitamins_formatted, by = "Treatment") |>
+  mutate(
+    `N Treated` = IPW_sensitivity_vitamins_df$n_treated,
+    `N Control` = IPW_sensitivity_vitamins_df$n_control,
+    `Balance (SMD)` = SMD
+  ) |>
+  arrange(ipw_ate) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, `Balance (SMD)`,
+         `ATE (G-comp)`, `95% CI (G-comp)`,
+         `N Treated`, `N Control`) |>
+  rename(
+    `CI (IPW)` = `95% CI (IPW)`,
+    `CI (G-comp)` = `95% CI (G-comp)`,
+    `Residual imbalance` = `Balance (SMD)`,
+    `N Users` = `N Treated`,
+    `N Non-users` = `N Control`
+  )
+
+# Apply display names to Treatment column
+sensitivity_vitamins_comparison_table <- sensitivity_vitamins_comparison_table |>
+  mutate(Treatment = sapply(Treatment, format_display_name)) |>
+  rename(Intervention = Treatment)
+
+# Display the vitamin-adjusted sensitivity comparison table as a flextable
+sensitivity_vitamins_comparison_table_flextable <- flextable(sensitivity_vitamins_comparison_table) |>
+  fontsize(size = 10, part = "all") |>
+  padding(padding = 2, part = "all") |>
+  autofit() |>
+  set_table_properties(layout = "autofit", width = 1, align = "left")
+
+# Print the flextable
+sensitivity_vitamins_comparison_table_flextable
+
+register_supplementary_table(supplementary_export, "supptbl-sensitivity-vitamins", sensitivity_vitamins_comparison_table)
+```
+
+Full table, title, and caption: see the accompanying supplementary tables Excel workbook.
+
+Worksheet @supptbl-sensitivity-vitamins.
+
+:::::
+
+## Supplementary @suppfig-sensitivity-mutual-adjustment: Effects of Pharmacological Interventions on DunedinPACE – Mutual-Adjustment Sensitivity Analysis vs Main Analysis
+
+::::: {#suppfig-sensitivity-mutual-adjustment suppfig-align="left"}
+
+```{r}
+#| fig-align: left
+#| fig-width: 13
+#| echo: false
+
+knitr::include_graphics(here::here("Output", "Forest_plots", "sensitivity_mutual_adjustment_forest_plot.png"))
+```
+
+**Sensitivity analysis with mutual adjustment for concurrent intervention use compared to the main analysis.** Forest plot showing average treatment effects (ATEs) on DunedinPACE for the fixed set of 12 interventions, including workout supplements with its borderline IPW result. Each intervention was analyzed in turn as the exposure, with adjustment for the other 11 interventions and the nine primary covariates. **(A)** Inverse probability weighting (IPW). **(B)** G-computation. Each panel overlays the mutually adjusted and main-analysis estimates for the same interventions, ordered by the mutually adjusted IPW estimate, with the same intervention order and effect scale in both panels. Circles represent point estimates and capped horizontal lines represent 95% confidence intervals; the dashed vertical line indicates no effect (ATE = 0). ATE percentages and their 95% confidence limits express absolute DunedinPACE differences as percentages of the reference pace of 1 biological year per calendar year. Divide the displayed ATE percentage and each confidence limit by 100, retaining their signs, to recover absolute differences in DunedinPACE units.
+
+:::::
+
+## Supplementary @supptbl-sensitivity-mutual-adjustment
+
+::::: {#supptbl-sensitivity-mutual-adjustment supptbl-align="left"}
+
+```{r}
+#| echo: false
+#| include: false
+#| cache: false
+
+load(here::here("Output", "IPW_sensitivity_mutual_adjustment_df"))
+load(here::here("Output", "Standardization_sensitivity_mutual_adjustment_df"))
+
+# Require one result per intervention and outcome before joining methods and counts.
+mutual_adjustment_keys <- c("treatment", "outcome")
+for (mutual_method_results in list(IPW_sensitivity_mutual_adjustment_df,
+                                 Standardization_sensitivity_mutual_adjustment_df)) {
+  stopifnot(nrow(mutual_method_results) == 12L,
+            !anyNA(mutual_method_results[mutual_adjustment_keys]),
+            !anyDuplicated(mutual_method_results[mutual_adjustment_keys]),
+            all(mutual_method_results$outcome == "DunedinPACE"))
+}
+stopifnot(setequal(IPW_sensitivity_mutual_adjustment_df$treatment,
+                   Standardization_sensitivity_mutual_adjustment_df$treatment))
+
+mutual_adjustment_results <- IPW_sensitivity_mutual_adjustment_df |>
+  inner_join(Standardization_sensitivity_mutual_adjustment_df,
+             by = mutual_adjustment_keys, suffix = c("_ipw", "_std"))
+stopifnot(all(mutual_adjustment_results$n_treated_ipw == mutual_adjustment_results$n_treated_std),
+          all(mutual_adjustment_results$n_control_ipw == mutual_adjustment_results$n_control_std))
+
+sensitivity_mutual_adjustment_comparison_table <- mutual_adjustment_results |>
+  arrange(ate_estimate_ipw) |>
+  transmute(
+    Intervention = vapply(treatment, format_display_name, character(1), USE.NAMES = FALSE),
+    `ATE (IPW)` = sprintf("%.2f%%", ate_estimate_ipw * 100),
+    `CI (IPW)` = sprintf("[%.2f%%, %.2f%%]", ci_lower_ipw * 100, ci_upper_ipw * 100),
+    `Residual imbalance` = format_residual_imbalance(SMD, treatment, "sensitivity_mutual_adjustment"),
+    `ATE (G-comp)` = sprintf("%.2f%%", ate_estimate_std * 100),
+    `CI (G-comp)` = sprintf("[%.2f%%, %.2f%%]", ci_lower_std * 100, ci_upper_std * 100),
+    `N Users` = n_treated_ipw,
+    `N Non-users` = n_control_ipw
+  )
+
+sensitivity_mutual_adjustment_comparison_table_flextable <- flextable(sensitivity_mutual_adjustment_comparison_table) |>
+  fontsize(size = 10, part = "all") |>
+  padding(padding = 2, part = "all") |>
+  autofit() |>
+  set_table_properties(layout = "autofit", width = 1, align = "left")
+
+sensitivity_mutual_adjustment_comparison_table_flextable
+
+register_supplementary_table(supplementary_export, "supptbl-sensitivity-mutual-adjustment", sensitivity_mutual_adjustment_comparison_table)
+```
+
+Full table, title, and caption: see the accompanying supplementary tables Excel workbook.
+
+Worksheet @supptbl-sensitivity-mutual-adjustment.
+
+:::::
+
+## Supplementary @suppfig-sensitivity-combinations: Exact Intervention Combinations and Their Constituent Interventions
+
+::::: {#suppfig-sensitivity-combinations suppfig-align="left"}
+
+```{r}
+#| fig-align: left
+#| out-width: "100%"
+#| echo: false
+
+knitr::include_graphics(here::here("Output", "Forest_plots", "sensitivity_combinations_forest_plot.png"))
+```
+
+**Exact intervention combinations and their constituent interventions: an exploratory sensitivity analysis.** Forest plot showing average treatment effects (ATEs) on DunedinPACE for the `r n_top_combinations` most frequent exact-use combinations containing at least two interventions (@suppfig-upset), together with the `r n_component_interventions` individual interventions occurring in those combinations. The individual-intervention rows repeat the corresponding estimates from the main pharmacological intervention forest plot (@fig-forest-plot-treatments); other main-analysis interventions are omitted. Combination rows require use of every listed intervention and no use of the remaining interventions among the 18 evaluated, and compare these participants with all remaining participants. The individual-intervention rows compare users with non-users and include concurrent users. The purpose is to explore whether common combinations have more favorable estimated associations with the pace of biological aging than their constituent intervention exposures. Both inverse probability weighting (IPW) and G-computation use the main analytical cohort and adjust for the same covariates. Circles represent point estimates and capped horizontal lines represent 95% bootstrap confidence intervals; the dashed vertical line indicates no effect. All rows are ordered together by the signed IPW estimate, from most negative to most positive. ATE percentages and their 95% confidence limits express absolute DunedinPACE differences as percentages of the reference pace of 1 biological year per calendar year. Divide the displayed ATE percentage and each confidence limit by 100, retaining their signs, to recover absolute differences in DunedinPACE units.
+
+:::::
+
+## Supplementary @supptbl-sensitivity-combinations
+
+::::: {#supptbl-sensitivity-combinations supptbl-align="left"}
+
+```{r}
+#| echo: false
+#| include: false
+#| cache: false
+
+sensitivity_combinations_comparison_table <- combination_summary$results |>
+  transmute(
+    Intervention = label,
+    `Exposure type` = exposure_type,
+    `ATE (IPW)` = sprintf("%.2f%%", ate_estimate_ipw * 100),
+    `CI (IPW)` = sprintf("[%.2f%%, %.2f%%]", ci_lower_ipw * 100, ci_upper_ipw * 100),
+    `Residual imbalance` = format_residual_imbalance(SMD, treatment, analysis),
+    `ATE (G-comp)` = sprintf("%.2f%%", ate_estimate_std * 100),
+    `CI (G-comp)` = sprintf("[%.2f%%, %.2f%%]", ci_lower_std * 100, ci_upper_std * 100),
+    `N Exposed` = n_treated_ipw,
+    `N Reference` = n_control_ipw
+  )
+
+register_supplementary_table(supplementary_export, "supptbl-sensitivity-combinations",
+                             sensitivity_combinations_comparison_table)
+```
+
+Full table, title, and caption: see the accompanying supplementary tables Excel workbook.
+
+Worksheet @supptbl-sensitivity-combinations.
+
+:::::
+
+## Supplementary @suppfig-heatmap-ipw: Standardized Biomarker Estimates Using IPW
+
+::::: {#suppfig-heatmap-ipw suppfig-align="left"}
+
+```{r}
+#| fig-align: left
+#| echo: false
+#| out-width: "100%"
+
+knitr::include_graphics(file.path(biomarker_output_dir, "main_heatmap_IPW.png"))
+```
+
+**Standardized biomarker estimates using inverse probability weighting (IPW).** Cells show adjusted average treatment effects for intervention use versus non-use and exercise-frequency categories versus never exercising. Columns represent biomarkers and rows represent interventions. All biomarkers except DunedinPACE were regressed on chronological age and the residuals standardized before modeling, yielding estimates in age-adjusted SD units. DunedinPACE was standardized directly without age residualization, retaining the main-analysis method apart from standardization before IPW and G-computation. Green denotes negative and red positive displayed ATE estimates, with white at zero and color saturation at ±`r heatmap_export_metadata$heatmap_limit`. For Telomere.Values.PC and DNAmVO2max (†), original estimates are multiplied by −1 for both colors and clustering. Green therefore indicates a favorable estimate direction in these biomarkers. Dendrograms show Euclidean-distance, complete-linkage clustering of the full sign-adjusted profiles, independently for each axis. A cell star (*) indicates that the original 95% bootstrap confidence interval strictly excludes zero, without adjustment for multiple comparisons. Original estimates, confidence intervals, displayed values, sample sizes and actual bootstrap counts are provided in Supplementary Data S1.
+
+:::::
+
+## Supplementary @suppfig-heatmap-gcomp: Standardized Biomarker Estimates Using G-Computation
+
+::::: {#suppfig-heatmap-gcomp suppfig-align="left"}
+
+```{r}
+#| fig-align: left
+#| echo: false
+#| out-width: "100%"
+
+knitr::include_graphics(file.path(biomarker_output_dir, "main_heatmap_G-comp.png"))
+```
+
+**Standardized biomarker estimates using G-computation.** Cells show adjusted average treatment effects for intervention use versus non-use and exercise-frequency categories versus never exercising. Columns represent biomarkers and rows represent interventions. All biomarkers except DunedinPACE were regressed on chronological age and the residuals standardized before modeling, yielding estimates in age-adjusted SD units. DunedinPACE was standardized directly without age residualization, retaining the main-analysis method apart from standardization before IPW and G-computation. Green denotes negative and red positive displayed ATE estimates, with white at zero and color saturation at ±`r heatmap_export_metadata$heatmap_limit`. For Telomere.Values.PC and DNAmVO2max (†), original estimates are multiplied by −1 for both colors and clustering. Green therefore indicates a favorable estimate direction in these biomarkers. Dendrograms show Euclidean-distance, complete-linkage clustering of the full sign-adjusted profiles, independently for each axis. A cell star (*) indicates that the original 95% bootstrap confidence interval strictly excludes zero, without adjustment for multiple comparisons. Original estimates, confidence intervals, displayed values, sample sizes and actual bootstrap counts are provided in Supplementary Data S2.
+
+:::::
+
+## Supplementary @suppfig-subgroup-sex: Effects of Pharmacological Interventions on DunedinPACE – Subgroup Analysis for Men vs Women
+
+::::: {#suppfig-subgroup-sex suppfig-align="left"}
+
+```{r}
+#| fig-align: left
+#| fig-width: 13
+#| fig-height: 9.91
+#| echo: false
+
+load(here::here("Output", "Forest_plots", "subgroup_sex_forest_plot"))
+plot
+```
+
+**Subgroup analysis in men versus women.** Forest plot showing average treatment effects (ATEs) of the evaluated pharmacological interventions on DunedinPACE among men compared to women. **(A)** Inverse probability weighting (IPW). **(B)** G-computation. Each panel overlays men and women, with the same intervention order and effect scale in both panels. Circles represent point estimates and capped horizontal lines represent 95% confidence intervals; the dashed vertical line indicates no effect (ATE = 0). The figure was used to assess whether intervention effects differed by biological sex. ATE percentages and their 95% confidence limits express absolute DunedinPACE differences as percentages of the reference pace of 1 biological year per calendar year. Divide the displayed ATE percentage and each confidence limit by 100, retaining their signs, to recover absolute differences in DunedinPACE units.
+
+:::::
+
+## Supplementary @supptbl-subgroup-men
+
+::::: {#supptbl-subgroup-men supptbl-align="left"}
+
+```{r}
+#| echo: false
+#| include: false
+#| cache: false
+
+# Load both subgroup results for men
+load(here::here("Output", "IPW_subgroup_male_df"))
+load(here::here("Output", "Standardization_subgroup_male_df"))
+
+# Prepare IPW results
+ipw_male_formatted <- IPW_subgroup_male_df |>
+  mutate(
+    SMD = format_residual_imbalance(SMD, treatment, "subgroup_male"),
+    Treatment = treatment,
+    `ATE (IPW)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (IPW)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100),
+    ipw_ate = ate_estimate
+  ) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, SMD, ipw_ate)
+
+# Prepare Standardization results
+std_male_formatted <- Standardization_subgroup_male_df |>
+  mutate(
+    Treatment = treatment,
+    `ATE (G-comp)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (G-comp)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100)
+  ) |>
+  select(Treatment, `ATE (G-comp)`, `95% CI (G-comp)`)
+
+# Merge results side by side and sort by IPW effect estimate
+male_comparison_table <- ipw_male_formatted |>
+  left_join(std_male_formatted, by = "Treatment") |>
+  mutate(
+    `N Treated` = IPW_subgroup_male_df$n_treated,
+    `N Control` = IPW_subgroup_male_df$n_control,
+    `Balance (SMD)` = SMD
+  ) |>
+  arrange(ipw_ate) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, `Balance (SMD)`,
+         `ATE (G-comp)`, `95% CI (G-comp)`,
+         `N Treated`, `N Control`) |>
+  rename(
+    `CI (IPW)` = `95% CI (IPW)`,
+    `CI (G-comp)` = `95% CI (G-comp)`,
+    `Residual imbalance` = `Balance (SMD)`,
+    `N Users` = `N Treated`,
+    `N Non-users` = `N Control`
+  )
+
+# Apply display names to Treatment column
+male_comparison_table <- male_comparison_table |>
+  mutate(Treatment = sapply(Treatment, format_display_name)) |>
+  rename(Intervention = Treatment)
+
+# Display the men subgroup comparison table as a flextable
+male_comparison_table_flextable <- flextable(male_comparison_table) |>
+  fontsize(size = 10, part = "all") |>
+  padding(padding = 2, part = "all") |>
+  autofit() |>
+  set_table_properties(layout = "autofit", width = 1, align = "left")
+
+# Print the flextable
+male_comparison_table_flextable
+
+register_supplementary_table(supplementary_export, "supptbl-subgroup-men", male_comparison_table)
+```
+
+Full table, title, and caption: see the accompanying supplementary tables Excel workbook.
+
+Worksheet @supptbl-subgroup-men.
+
+:::::
+
+## Supplementary @supptbl-subgroup-women
+
+::::: {#supptbl-subgroup-women supptbl-align="left"}
+
+```{r}
+#| echo: false
+#| include: false
+#| cache: false
+
+# Load both subgroup results for women
+load(here::here("Output", "IPW_subgroup_female_df"))
+load(here::here("Output", "Standardization_subgroup_female_df"))
+
+# Prepare IPW results
+ipw_female_formatted <- IPW_subgroup_female_df |>
+  mutate(
+    SMD = format_residual_imbalance(SMD, treatment, "subgroup_female"),
+    Treatment = treatment,
+    `ATE (IPW)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (IPW)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100),
+    ipw_ate = ate_estimate
+  ) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, SMD, ipw_ate)
+
+# Prepare Standardization results
+std_female_formatted <- Standardization_subgroup_female_df |>
+  mutate(
+    Treatment = treatment,
+    `ATE (G-comp)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (G-comp)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100)
+  ) |>
+  select(Treatment, `ATE (G-comp)`, `95% CI (G-comp)`)
+
+# Merge results side by side and sort by IPW effect estimate
+female_comparison_table <- ipw_female_formatted |>
+  left_join(std_female_formatted, by = "Treatment") |>
+  mutate(
+    `N Treated` = IPW_subgroup_female_df$n_treated,
+    `N Control` = IPW_subgroup_female_df$n_control,
+    `Balance (SMD)` = SMD
+  ) |>
+  arrange(ipw_ate) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, `Balance (SMD)`,
+         `ATE (G-comp)`, `95% CI (G-comp)`,
+         `N Treated`, `N Control`) |>
+  rename(
+    `CI (IPW)` = `95% CI (IPW)`,
+    `CI (G-comp)` = `95% CI (G-comp)`,
+    `Residual imbalance` = `Balance (SMD)`,
+    `N Users` = `N Treated`,
+    `N Non-users` = `N Control`
+  )
+
+# Apply display names to Treatment column
+female_comparison_table <- female_comparison_table |>
+  mutate(Treatment = sapply(Treatment, format_display_name)) |>
+  rename(Intervention = Treatment)
+
+# Display the women subgroup comparison table as a flextable
+female_comparison_table_flextable <- flextable(female_comparison_table) |>
+  fontsize(size = 10, part = "all") |>
+  padding(padding = 2, part = "all") |>
+  autofit() |>
+  set_table_properties(layout = "autofit", width = 1, align = "left")
+
+# Print the flextable
+female_comparison_table_flextable
+
+register_supplementary_table(supplementary_export, "supptbl-subgroup-women", female_comparison_table)
+```
+
+Full table, title, and caption: see the accompanying supplementary tables Excel workbook.
+
+Worksheet @supptbl-subgroup-women.
+
+:::::
+
+## Supplementary @suppfig-subgroup-age: Effects of Pharmacological Interventions on DunedinPACE – Subgroup Analysis for Younger vs Older Individuals
+
+::::: {#suppfig-subgroup-age suppfig-align="left"}
+
+```{r}
+#| fig-align: left
+#| fig-width: 13
+#| fig-height: 9.91
+#| echo: false
+
+load(here::here("Output", "Forest_plots", "subgroup_age_forest_plot"))
+plot
+```
+
+**Subgroup analysis in younger versus older participants.** Forest plot showing average treatment effects (ATEs) of the evaluated pharmacological interventions on DunedinPACE among participants below the median chronological age (`r round(median_age, 1)` years) compared to those at or above the median. **(A)** Inverse probability weighting (IPW). **(B)** G-computation. Each panel overlays younger and older participants, with the same intervention order and effect scale in both panels. Circles represent point estimates and capped horizontal lines represent 95% confidence intervals; the dashed vertical line indicates no effect (ATE = 0). The figure was used to assess whether intervention effects differed by age. ATE percentages and their 95% confidence limits express absolute DunedinPACE differences as percentages of the reference pace of 1 biological year per calendar year. Divide the displayed ATE percentage and each confidence limit by 100, retaining their signs, to recover absolute differences in DunedinPACE units.
+
+:::::
+
+## Supplementary @supptbl-subgroup-younger
+
+::::: {#supptbl-subgroup-younger supptbl-align="left"}
+
+```{r}
+#| echo: false
+#| include: false
+#| cache: false
+
+# Load both subgroup results for younger
+load(here::here("Output", "IPW_subgroup_younger_df"))
+load(here::here("Output", "Standardization_subgroup_younger_df"))
+
+# Prepare IPW results
+ipw_younger_formatted <- IPW_subgroup_younger_df |>
+  mutate(
+    SMD = format_residual_imbalance(SMD, treatment, "subgroup_younger"),
+    Treatment = treatment,
+    `ATE (IPW)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (IPW)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100),
+    ipw_ate = ate_estimate
+  ) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, SMD, ipw_ate)
+
+# Prepare Standardization results
+std_younger_formatted <- Standardization_subgroup_younger_df |>
+  mutate(
+    Treatment = treatment,
+    `ATE (G-comp)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (G-comp)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100)
+  ) |>
+  select(Treatment, `ATE (G-comp)`, `95% CI (G-comp)`)
+
+# Merge results side by side and sort by IPW effect estimate
+younger_comparison_table <- ipw_younger_formatted |>
+  left_join(std_younger_formatted, by = "Treatment") |>
+  mutate(
+    `N Treated` = IPW_subgroup_younger_df$n_treated,
+    `N Control` = IPW_subgroup_younger_df$n_control,
+    `Balance (SMD)` = SMD
+  ) |>
+  arrange(ipw_ate) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, `Balance (SMD)`,
+         `ATE (G-comp)`, `95% CI (G-comp)`,
+         `N Treated`, `N Control`) |>
+  rename(
+    `CI (IPW)` = `95% CI (IPW)`,
+    `CI (G-comp)` = `95% CI (G-comp)`,
+    `Residual imbalance` = `Balance (SMD)`,
+    `N Users` = `N Treated`,
+    `N Non-users` = `N Control`
+  )
+
+# Apply display names to Treatment column
+younger_comparison_table <- younger_comparison_table |>
+  mutate(Treatment = sapply(Treatment, format_display_name)) |>
+  rename(Intervention = Treatment)
+
+# Display the younger subgroup comparison table as a flextable
+younger_comparison_table_flextable <- flextable(younger_comparison_table) |>
+  fontsize(size = 10, part = "all") |>
+  padding(padding = 2, part = "all") |>
+  autofit() |>
+  set_table_properties(layout = "autofit", width = 1, align = "left")
+
+# Print the flextable
+younger_comparison_table_flextable
+
+register_supplementary_table(supplementary_export, "supptbl-subgroup-younger", younger_comparison_table)
+```
+
+Full table, title, and caption: see the accompanying supplementary tables Excel workbook.
+
+Worksheet @supptbl-subgroup-younger.
+
+:::::
+
+## Supplementary @supptbl-subgroup-older
+
+::::: {#supptbl-subgroup-older supptbl-align="left"}
+
+```{r}
+#| echo: false
+#| include: false
+#| cache: false
+
+# Load both subgroup results for older
+load(here::here("Output", "IPW_subgroup_older_df"))
+load(here::here("Output", "Standardization_subgroup_older_df"))
+
+# Prepare IPW results
+ipw_older_formatted <- IPW_subgroup_older_df |>
+  mutate(
+    SMD = format_residual_imbalance(SMD, treatment, "subgroup_older"),
+    Treatment = treatment,
+    `ATE (IPW)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (IPW)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100),
+    ipw_ate = ate_estimate
+  ) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, SMD, ipw_ate)
+
+# Prepare Standardization results
+std_older_formatted <- Standardization_subgroup_older_df |>
+  mutate(
+    Treatment = treatment,
+    `ATE (G-comp)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (G-comp)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100)
+  ) |>
+  select(Treatment, `ATE (G-comp)`, `95% CI (G-comp)`)
+
+# Merge results side by side and sort by IPW effect estimate
+older_comparison_table <- ipw_older_formatted |>
+  left_join(std_older_formatted, by = "Treatment") |>
+  mutate(
+    `N Treated` = IPW_subgroup_older_df$n_treated,
+    `N Control` = IPW_subgroup_older_df$n_control,
+    `Balance (SMD)` = SMD
+  ) |>
+  arrange(ipw_ate) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, `Balance (SMD)`,
+         `ATE (G-comp)`, `95% CI (G-comp)`,
+         `N Treated`, `N Control`) |>
+  rename(
+    `CI (IPW)` = `95% CI (IPW)`,
+    `CI (G-comp)` = `95% CI (G-comp)`,
+    `Residual imbalance` = `Balance (SMD)`,
+    `N Users` = `N Treated`,
+    `N Non-users` = `N Control`
+  )
+
+# Apply display names to Treatment column
+older_comparison_table <- older_comparison_table |>
+  mutate(Treatment = sapply(Treatment, format_display_name)) |>
+  rename(Intervention = Treatment)
+
+# Display the older subgroup comparison table as a flextable
+older_comparison_table_flextable <- flextable(older_comparison_table) |>
+  fontsize(size = 10, part = "all") |>
+  padding(padding = 2, part = "all") |>
+  autofit() |>
+  set_table_properties(layout = "autofit", width = 1, align = "left")
+
+# Print the flextable
+older_comparison_table_flextable
+
+register_supplementary_table(supplementary_export, "supptbl-subgroup-older", older_comparison_table)
+```
+
+Full table, title, and caption: see the accompanying supplementary tables Excel workbook.
+
+Worksheet @supptbl-subgroup-older.
+
+:::::
+
+## Supplementary @suppfig-subgroup-ethnicity: Effects of Pharmacological Interventions on DunedinPACE – Subgroup Analysis for European vs Non-European Ethnicity
+
+::::: {#suppfig-subgroup-ethnicity suppfig-align="left"}
+
+```{r}
+#| fig-align: left
+#| fig-width: 13
+#| fig-height: 9.91
+#| echo: false
+
+load(here::here("Output", "Forest_plots", "subgroup_ethnicity_forest_plot"))
+plot
+```
+
+**Subgroup analysis in European versus non-European ethnicity.** Forest plot showing average treatment effects (ATEs) of the evaluated pharmacological interventions on DunedinPACE among participants classified as having European ethnicity compared to non-European ethnicity. **(A)** Inverse probability weighting (IPW). **(B)** G-computation. Each panel overlays European and non-European ethnicity groups, with the same intervention order and effect scale in both panels. Circles represent point estimates and capped horizontal lines represent 95% confidence intervals; the dashed vertical line indicates no effect (ATE = 0). The figure was used to assess whether intervention effects differed by ethnicity group. ATE percentages and their 95% confidence limits express absolute DunedinPACE differences as percentages of the reference pace of 1 biological year per calendar year. Divide the displayed ATE percentage and each confidence limit by 100, retaining their signs, to recover absolute differences in DunedinPACE units.
+
+:::::
+
+## Supplementary @supptbl-subgroup-european
+
+::::: {#supptbl-subgroup-european supptbl-align="left"}
+
+```{r}
+#| echo: false
+#| include: false
+#| cache: false
+
+# Load both subgroup results for Europeans
+load(here::here("Output", "IPW_subgroup_european_df"))
+load(here::here("Output", "Standardization_subgroup_european_df"))
+
+# Prepare IPW results
+ipw_european_formatted <- IPW_subgroup_european_df |>
+  mutate(
+    SMD = format_residual_imbalance(SMD, treatment, "subgroup_european"),
+    Treatment = treatment,
+    `ATE (IPW)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (IPW)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100),
+    ipw_ate = ate_estimate
+  ) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, SMD, ipw_ate)
+
+# Prepare Standardization results
+std_european_formatted <- Standardization_subgroup_european_df |>
+  mutate(
+    Treatment = treatment,
+    `ATE (G-comp)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (G-comp)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100)
+  ) |>
+  select(Treatment, `ATE (G-comp)`, `95% CI (G-comp)`)
+
+# Merge results side by side and sort by IPW effect estimate
+european_comparison_table <- ipw_european_formatted |>
+  left_join(std_european_formatted, by = "Treatment") |>
+  mutate(
+    `N Treated` = IPW_subgroup_european_df$n_treated,
+    `N Control` = IPW_subgroup_european_df$n_control,
+    `Balance (SMD)` = SMD
+  ) |>
+  arrange(ipw_ate) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, `Balance (SMD)`,
+         `ATE (G-comp)`, `95% CI (G-comp)`,
+         `N Treated`, `N Control`) |>
+  rename(
+    `CI (IPW)` = `95% CI (IPW)`,
+    `CI (G-comp)` = `95% CI (G-comp)`,
+    `Residual imbalance` = `Balance (SMD)`,
+    `N Users` = `N Treated`,
+    `N Non-users` = `N Control`
+  )
+
+# Apply display names to Treatment column
+european_comparison_table <- european_comparison_table |>
+  mutate(Treatment = sapply(Treatment, format_display_name)) |>
+  rename(Intervention = Treatment)
+
+# Display the European subgroup comparison table as a flextable
+european_comparison_table_flextable <- flextable(european_comparison_table) |>
+  fontsize(size = 10, part = "all") |>
+  padding(padding = 2, part = "all") |>
+  autofit() |>
+  set_table_properties(layout = "autofit", width = 1, align = "left")
+
+# Print the flextable
+european_comparison_table_flextable
+
+register_supplementary_table(supplementary_export, "supptbl-subgroup-european", european_comparison_table)
+```
+
+Full table, title, and caption: see the accompanying supplementary tables Excel workbook.
+
+Worksheet @supptbl-subgroup-european.
+
+:::::
+
+## Supplementary @supptbl-subgroup-noneuropean
+
+::::: {#supptbl-subgroup-noneuropean supptbl-align="left"}
+
+```{r}
+#| echo: false
+#| include: false
+#| cache: false
+
+# Load both subgroup results for Non-Europeans
+load(here::here("Output", "IPW_subgroup_noneuropean_df"))
+load(here::here("Output", "Standardization_subgroup_noneuropean_df"))
+
+# Prepare IPW results
+ipw_noneuropean_formatted <- IPW_subgroup_noneuropean_df |>
+  mutate(
+    SMD = format_residual_imbalance(SMD, treatment, "subgroup_noneuropean"),
+    Treatment = treatment,
+    `ATE (IPW)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (IPW)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100),
+    ipw_ate = ate_estimate
+  ) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, SMD, ipw_ate)
+
+# Prepare Standardization results
+std_noneuropean_formatted <- Standardization_subgroup_noneuropean_df |>
+  mutate(
+    Treatment = treatment,
+    `ATE (G-comp)` = sprintf("%.2f%%", ate_estimate * 100),
+    `95% CI (G-comp)` = sprintf("[%.2f%%, %.2f%%]", ci_lower * 100, ci_upper * 100)
+  ) |>
+  select(Treatment, `ATE (G-comp)`, `95% CI (G-comp)`)
+
+# Merge results side by side and sort by IPW effect estimate
+noneuropean_comparison_table <- ipw_noneuropean_formatted |>
+  left_join(std_noneuropean_formatted, by = "Treatment") |>
+  mutate(
+    `N Treated` = IPW_subgroup_noneuropean_df$n_treated,
+    `N Control` = IPW_subgroup_noneuropean_df$n_control,
+    `Balance (SMD)` = SMD
+  ) |>
+  arrange(ipw_ate) |>
+  select(Treatment, `ATE (IPW)`, `95% CI (IPW)`, `Balance (SMD)`,
+         `ATE (G-comp)`, `95% CI (G-comp)`,
+         `N Treated`, `N Control`) |>
+  rename(
+    `CI (IPW)` = `95% CI (IPW)`,
+    `CI (G-comp)` = `95% CI (G-comp)`,
+    `Residual imbalance` = `Balance (SMD)`,
+    `N Users` = `N Treated`,
+    `N Non-users` = `N Control`
+  )
+
+# Apply display names to Treatment column
+noneuropean_comparison_table <- noneuropean_comparison_table |>
+  mutate(Treatment = sapply(Treatment, format_display_name)) |>
+  rename(Intervention = Treatment)
+
+# Display the Non-European subgroup comparison table as a flextable
+noneuropean_comparison_table_flextable <- flextable(noneuropean_comparison_table) |>
+  fontsize(size = 10, part = "all") |>
+  padding(padding = 2, part = "all") |>
+  autofit() |>
+  set_table_properties(layout = "autofit", width = 1, align = "left")
+
+# Print the flextable
+noneuropean_comparison_table_flextable
+
+register_supplementary_table(supplementary_export, "supptbl-subgroup-noneuropean", noneuropean_comparison_table)
+```
+
+Full table, title, and caption: see the accompanying supplementary tables Excel workbook.
+
+Worksheet @supptbl-subgroup-noneuropean.
+
+:::::
+
+## Supplementary @suppfig-hrt-women-balance: Covariate Balance for Hormone Replacement Therapy in Women
+
+::::: {#suppfig-hrt-women-balance suppfig-align="left"}
+
+```{r}
+#| fig-align: left
+#| echo: false
+#| out-width: "100%"
+
+knitr::include_graphics(here::here("Output", "love_plots", "subgroup_female", "love_plot_Antiaging_Hormone_Replacement.png"))
+```
+
+**Covariate balance for hormone replacement therapy in women.** Love plot showing standardized mean differences (SMDs) for demographic and lifestyle covariates before and after inverse probability weighting (IPW). The dashed vertical lines at \|SMD\| = 0.1 indicate the conventional threshold for adequate balance. Positive SMDs indicate higher values for continuous covariates or higher proportions in the listed categories among women using HRT compared with women not using HRT; negative SMDs indicate lower values for continuous covariates or lower proportions in the listed categories among women using HRT compared with women not using HRT. Notably, chronological age remained imbalanced after IPW, with more users being older.
+
+:::::
+
+```{r}
+#| include: false
+#| cache: false
+
+finish_supplementary_export(supplementary_export)
+```
+
+# References

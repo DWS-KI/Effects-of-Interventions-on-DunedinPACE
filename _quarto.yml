@@ -1,0 +1,8 @@
+project:
+  type: default
+  render:
+    - Manuscript.qmd
+  pre-render:
+    - Rscript Program/export_supplementary_tables.R prepare
+  post-render:
+    - Rscript Program/export_supplementary_tables.R finalize
